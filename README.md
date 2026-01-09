@@ -72,8 +72,29 @@ This configuration uses 80 Mel bins and Sub-Spectral Normalization (SSN). This p
 ```
 python main.py --data_root ./dataset --duration 1.5 --n_mels 80
 ```
-3. Microcontroller Training (Tiny Models)
+Understanding the Parameters:
+
+--duration 1.5:
+
+Increases the input window to 1.5 seconds. Essential for multi-word phrases (e.g., "Ok Google", "Hey Siri") that physically take longer to speak than a single word like "Stop".
+
+--tau (Model Width Multiplier):
+
+This controls the capacity of the model by scaling the number of channels (filters) in every layer.
+
+Choices: [1, 1.5, 2, 3, 6, 8]
+
+tau=1: The base model (Base Channels = 8). Fast, lightweight.
+
+tau=1.5: Increases filters by 50% (Base Channels = 12).
+
+tau=2: Doubles the filters (Base Channels = 16). Significant accuracy boost for complex words, but file size increases by ~4x.
+
+tau=8: Massive model (Base Channels = 64). Likely too slow for Pi Zero 2, but very accurate.
+
+Note: Unlike the original Qualcomm repo, this implementation enables SpecAugment for ALL tau values to ensure maximum robustness.3. Microcontroller Training (Tiny Models)
 This configuration uses 40 Mel bins and disables SSN. Use this if you are targeting very low-power microcontrollers (e.g., ESP32, Cortex-M4) and need to save every bit of RAM/Compute.
+
 ```
 python main.py --data_root ./dataset --n_mels 40 --no_ssn
 ```
