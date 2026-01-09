@@ -20,15 +20,15 @@ Note: The internal logic remains identical. ONNX Runtime automatically detects t
 You can adjust the behavior of the stream to balance latency vs accuracy.  
 Model Settings   
 --model bcresnet_float32.onnx Path to your .onnx model file (Float32 or Int8).  
---sample_rate16000 Audio sample rate. Must match your training configuration.  
---duration1.5 Input window length in seconds. Must match training.  
---wakeword_idx2 The class index of your wake word (usually 2 if folders are silence, unknown, wakeword).  
+--sample_rate 16000 Audio sample rate. Must match your training configuration.  
+--duration 1.5 Input window length in seconds. Must match training.  
+--wakeword_idx 2 The class index of your wake word (usually 2 if folders are silence, unknown, wakeword).  
 Inference Logic  
---poll_rate0.1 How often to run the model (in seconds). Lower = more responsive but higher CPU usage.  
---threshold0.85 Confidence (0.0 - 1.0) required to trigger a detection.  
+--poll_rate 0.1 How often to run the model (in seconds). Lower = more responsive but higher CPU usage.  
+--threshold 0.85 Confidence (0.0 - 1.0) required to trigger a detection.  
 Robustness (Smoothing & Cooldown)  
---average_window3Number of past frames to average. Removes glitches/spikes. Higher = smoother but adds slight lag.  
---cooldown2.0 Seconds to wait after a detection before listening again. Prevents double-triggering on one word.  
+--average_window 3 Number of past frames to average. Removes glitches/spikes. Higher = smoother but adds slight lag.  
+--cooldown 2.0 Seconds to wait after a detection before listening again. Prevents double-triggering on one word.  
 Hardware   
 --device None The numerical index of your microphone. Use python -m sounddevice to list available devices.  
 ⚡ Examples  
