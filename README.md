@@ -74,7 +74,7 @@ pip install torch torchvision torchaudio soundfile onnx onnxruntime tqdm numpy
 2. Standard Training (Recommended for Pi Zero 2)
 This configuration uses 80 Mel bins and Sub-Spectral Normalization (SSN). This provides the highest accuracy and robustness against noise.
 ```
-python main.py --data_root ./dataset --duration 1.5 --n_mels 80
+python main2.py --data_root ./dataset --duration 1.5 --n_mels 80
 ```
 Understanding the Parameters:
 
@@ -102,7 +102,7 @@ Note: Unlike the original Qualcomm repo, this implementation enables SpecAugment
 This configuration uses 40 Mel bins and disables SSN. Use this if you are targeting very low-power microcontrollers (e.g., ESP32, Cortex-M4) and need to save every bit of RAM/Compute.
 
 ```
-python main.py --data_root ./dataset --n_mels 40 --no_ssn
+python main2.py --data_root ./dataset --n_mels 40 --no_ssn
 ```
 ⚙️ Input Parameters
 
