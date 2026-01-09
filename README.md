@@ -114,8 +114,12 @@ python main2.py --data_root ./dataset --n_mels 40 --no_ssn
 --tau	1.0	Model width multiplier. Use 1.5 or 2.0 for larger/more accurate models.  
 --batch_size	64	Training batch size.  
 --device	auto	Force device: cuda, mps (Mac), cpu, or auto.  
- --spec_prob Probability (0.0-1.0) of applying SpecAugment  
- 
+--spec_prob Probability (0.0-1.0) of applying SpecAugment  
+--epochs EPOCHS
+--warmup_epochs WARMUP_EPOCHS
+--lr Learning rate
+--patience end training run after X epochs with increase in accuracy 
+
 ⚠️ Important: The "Vanishing Frequency" Problem
 If you wish to use 40 Mel Bins (common for microcontrollers), you MUST use the --no_ssn flag. Here is the deep technical reason why:
 
