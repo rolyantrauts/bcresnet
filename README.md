@@ -93,6 +93,7 @@ tau=2: Doubles the filters (Base Channels = 16). Significant accuracy boost for 
 tau=8: Massive model (Base Channels = 64). Likely too slow for Pi Zero 2, but very accurate.
 
 Note: Unlike the original Qualcomm repo, this implementation enables SpecAugment for ALL tau values to ensure maximum robustness.  
+
 3. Microcontroller Training (Tiny Models)
 This configuration uses 40 Mel bins and disables SSN. Use this if you are targeting very low-power microcontrollers (e.g., ESP32, Cortex-M4) and need to save every bit of RAM/Compute.
 
