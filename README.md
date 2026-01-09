@@ -101,7 +101,7 @@ This configuration uses 40 Mel bins and disables SSN. Use this if you are target
 python main.py --data_root ./dataset --n_mels 40 --no_ssn
 ```
 ⚙️ Input Parameters
-Argument	Default	Description  
+
 --data_root	./dataset	Path to your dataset root folder.  
 --duration	1.0	Target length of audio samples in seconds.  
 --sample_rate	16000	Target sample rate (Hz).  
