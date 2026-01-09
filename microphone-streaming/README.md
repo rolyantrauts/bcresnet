@@ -9,7 +9,7 @@ You need a few extra libraries to handle real-time audio and ONNX inference:
 ```
 pip install sounddevice numpy onnxruntime
 ```
-Linux/Raspberry Pi users: You might need to install PortAudio at the system level
+Linux/Raspberry Pi users: You might need to install PortAudio
 ```
 sudo apt-get install libportaudio2
 ```
