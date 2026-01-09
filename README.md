@@ -108,14 +108,14 @@ python main.py --data_root ./dataset --n_mels 40 --no_ssn
 ```
 ⚙️ Input Parameters
 Argument	Default	Description
---data_root	./dataset	Path to your dataset root folder.
---duration	1.0	Target length of audio samples in seconds.
---sample_rate	16000	Target sample rate (Hz).
---n_mels	80	Number of Mel frequency bins (Vertical resolution).
---no_ssn	False	Critical Flag: Disables Sub-Spectral Normalization (See below).
---tau	1.0	Model width multiplier. Use 1.5 or 2.0 for larger/more accurate models.
---batch_size	64	Training batch size.
---device	auto	Force device: cuda, mps (Mac), cpu, or auto.
+--data_root	./dataset	Path to your dataset root folder.  
+--duration	1.0	Target length of audio samples in seconds.  
+--sample_rate	16000	Target sample rate (Hz).  
+--n_mels	80	Number of Mel frequency bins (Vertical resolution).  
+--no_ssn	False	Critical Flag: Disables Sub-Spectral Normalization (See below).  
+--tau	1.0	Model width multiplier. Use 1.5 or 2.0 for larger/more accurate models.  
+--batch_size	64	Training batch size.  
+--device	auto	Force device: cuda, mps (Mac), cpu, or auto.  
 
 Export to Sheets
 
