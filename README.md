@@ -34,8 +34,12 @@ It has been adapted from the [original Qualcomm research](https://github.com/Qua
 * **Custom Datasets**: Train on your own "Wake Word" / "Unknown" / "Silence" folders.
 * **Variable Audio Lengths**: Support for 1.0s, 1.5s, or any custom duration.
 * **Edge Deployment**: Automatic export to **ONNX (Float32)** and **Quantized ONNX (Int8)** for Raspberry Pi Zero 2 and other edge devices.
+Main.py has been retained but there is a dependency hell between
+Opset 17: Supports STFT but crashes on the complex number types in your specific PyTorch version.
+Opset 12: Handles types safely but does not support STFT
 
-
+So internal log mel support doesn't seem possible and main2.py will have to be used instead and stream_test2.py
+Main2.py just has a external audio front end for the model input
 
 ---
 

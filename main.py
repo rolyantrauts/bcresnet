@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torchvision import transforms
 from tqdm import tqdm
+import json
 
 from bcresnet import BCResNets
 from utils import CustomAudioDataset, Padding, Preprocess
@@ -33,10 +34,11 @@ class Trainer:
         parser.add_argument("--n_mels", default=80, type=int)
         parser.add_argument("--no_ssn", action="store_true")
         
-        # --- NEW ARGS: Training Hyperparams ---
+        # Training Hyperparams
         parser.add_argument("--epochs", default=100, type=int, help="Total training epochs")
         parser.add_argument("--warmup_epochs", default=5, type=int, help="Epochs to warm up learning rate")
         parser.add_argument("--lr", default=0.1, type=float, help="Initial learning rate")
+        parser.add_argument("--patience", default=15, type=int, help="Early stopping patience")
 
         args = parser.parse_args()
         self.__dict__.update(vars(args))
@@ -52,7 +54,7 @@ class Trainer:
         print(f"Mel Bins     : {self.n_mels}")
         print(f"Model Tau    : {self.tau} (SSN={self.use_ssn})")
         print(f"Training     : {self.epochs} Epochs")
-        print(f"Warmup       : {self.warmup_epochs} Epochs (No saving)")
+        print(f"Patience     : {self.patience} Epochs")
         print("="*40 + "\n")
         
         if self.device == "auto":
@@ -96,9 +98,21 @@ class Trainer:
     def _load_model(self):
         print(f"Building BCResNet-%.1f..." % self.tau)
         self.model = BCResNets(tau=self.tau, num_classes=self.num_classes, use_ssn=self.use_ssn).to(self.device)
-        
         total_params = sum(p.numel() for p in self.model.parameters())
         print(f"Total Parameters: {total_params:,}")
+
+    def save_labels(self):
+        """Exports class names and indices to text and JSON files."""
+        # 1. Text File (Human Readable)
+        with open("labels.txt", "w") as f:
+            for i, cls in enumerate(self.train_dataset.classes):
+                f.write(f"{i}: {cls}\n")
+        
+        # 2. JSON File (Machine Readable)
+        with open("labels.json", "w") as f:
+            json.dump(self.train_dataset.class_to_idx, f, indent=4)
+            
+        print("[Success] Saved 'labels.txt' and 'labels.json'")
 
     def Test(self, loader):
         self.model.eval()
@@ -133,31 +147,49 @@ class Trainer:
         full_model = EndToEndModel(preprocessor_cpu, self.model)
         dummy_input = torch.randn(1, self.target_samples, requires_grad=False).to(cpu_device)
         
-        try:
-            torch.onnx.export(full_model, dummy_input, "bcresnet_float32.onnx", export_params=True, opset_version=17,
-                              input_names=['audio_input'], output_names=['output'],
-                              dynamic_axes={'audio_input': {0: 'batch'}, 'output': {0: 'batch'}})
-            print("[Success] Saved Float32 ONNX")
-        except Exception as e:
-            print(f"[Error] Float32 Export: {e}")
+        f32_path = "bcresnet_float32.onnx"
+        int8_path = "bcresnet_int8.onnx"
 
         try:
-            quantize_dynamic("bcresnet_float32.onnx", "bcresnet_int8.onnx", weight_type=QuantType.QUInt8)
-            print("[Success] Saved Int8 ONNX")
+            # --- FIX: Use Opset 12 to handle STFT Complex numbers correctly ---
+            torch.onnx.export(
+                full_model, 
+                dummy_input, 
+                f32_path, 
+                export_params=True, 
+                opset_version=12,  # <--- CHANGED FROM 17 to 12
+                do_constant_folding=False, # <--- CHANGED to False to prevent JIT errors
+                input_names=['audio_input'], 
+                output_names=['output'],
+                dynamic_axes={'audio_input': {0: 'batch'}, 'output': {0: 'batch'}}
+            )
+            print(f"[Success] Saved Float32 ONNX: {f32_path}")
+        except Exception as e:
+            print(f"[Error] Float32 Export: {e}")
+            return # Stop here if export fails
+
+        try:
+            print("Quantizing to Int8...")
+            quantize_dynamic(f32_path, int8_path, weight_type=QuantType.QUInt8)
+            print(f"[Success] Saved Int8 ONNX: {int8_path}")
+            
+            # Print Size Comparison
+            size_f32 = os.path.getsize(f32_path) / 1024
+            size_int8 = os.path.getsize(int8_path) / 1024
+            print(f"Size Reduction: {size_f32:.2f} KB -> {size_int8:.2f} KB")
         except Exception as e:
             print(f"[Error] Quantization: {e}")
 
     def __call__(self):
-        # Initial setup
         optimizer = torch.optim.SGD(self.model.parameters(), lr=0, weight_decay=1e-4, momentum=0.9)
         
-        # Calculate steps for manual scheduler
         steps_per_epoch = len(self.train_loader)
         warmup_steps = steps_per_epoch * self.warmup_epochs
         total_steps = steps_per_epoch * self.epochs
         global_step = 0
         
         best_acc = 0.0
+        patience_counter = 0  
         
         for epoch in range(1, self.epochs + 1):
             self.model.train()
@@ -167,19 +199,16 @@ class Trainer:
                 inputs, labels = inputs.to(self.device), labels.to(self.device)
                 inputs = self.preprocess_train(inputs, augment=True)
                 
-                # --- MANUAL LR SCHEDULER (Warmup + Cosine) ---
+                # Scheduler
                 global_step += 1
                 if global_step < warmup_steps:
-                    # Linear Warmup
                     lr = self.lr * global_step / warmup_steps
                 else:
-                    # Cosine Decay
                     progress = (global_step - warmup_steps) / (total_steps - warmup_steps)
                     lr = self.lr * 0.5 * (1 + np.cos(np.pi * progress))
                 
                 for param_group in optimizer.param_groups:
                     param_group['lr'] = lr
-                # ---------------------------------------------
 
                 optimizer.zero_grad()
                 outputs = self.model(inputs)
@@ -192,20 +221,29 @@ class Trainer:
             # Validation
             val_acc = self.Test(self.valid_loader)
             
-            # --- SAVE GUARD ---
-            # Only save if we are PAST the warmup phase
             if epoch > self.warmup_epochs:
                 if val_acc > best_acc:
                     best_acc = val_acc
+                    patience_counter = 0 
                     torch.save(self.model.state_dict(), "best_bcresnet.pth")
                     print(f"Epoch {epoch} | Val Acc: {val_acc:.2f}% (New Best!)")
                 else:
-                    print(f"Epoch {epoch} | Val Acc: {val_acc:.2f}%")
+                    patience_counter += 1
+                    print(f"Epoch {epoch} | Val Acc: {val_acc:.2f}% (No Improvement. Patience: {patience_counter}/{self.patience})")
+                    
+                    if patience_counter >= self.patience:
+                        print(f"\n>>> Early Stopping Triggered! (No improvement for {self.patience} epochs)")
+                        break
             else:
-                print(f"Epoch {epoch} | Val Acc: {val_acc:.2f}% (Warmup - Saving Skipped)")
+                print(f"Epoch {epoch} | Val Acc: {val_acc:.2f}% (Warmup)")
         
-        # End of training
-        self.model.load_state_dict(torch.load("best_bcresnet.pth", map_location=self.device))
+        print(f"\nTraining Finished. Best Accuracy: {best_acc:.2f}%")
+        
+        # --- EXPORT ARTIFACTS ---
+        self.save_labels()  # Save labels.txt and labels.json
+        
+        if os.path.exists("best_bcresnet.pth"):
+            self.model.load_state_dict(torch.load("best_bcresnet.pth", map_location=self.device))
         self.export_onnx()
 
 if __name__ == "__main__":
