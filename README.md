@@ -88,7 +88,7 @@ dataset/
     ├── wakeword/
     ├── unknown/
     └── silence/
-    
+ ```   
  Note: Audio files can be of any duration. They will be automatically padded or cropped to the --duration set in training arguments.
 
 🚀 Quick Start
