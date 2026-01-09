@@ -41,7 +41,7 @@ It has been adapted from the [original Qualcomm research](https://github.com/Qua
 
 ## 📂 Dataset Structure
 
-The training script expects your data to be organized into `training`, `validation`, and `testing` folders. Inside each, create subfolders for your specific classes (e.g., `wakeword`, `unknown`, `silence`).
+The training script expects your data to be organized into `training`, `validation`, and `testing` folders. Inside each, create any number of subfolders for your specific classes (e.g., `wakeword`, `unknown`, `silence`).
 
 **The script automatically detects class names from the folder names.**
 
