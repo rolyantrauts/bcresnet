@@ -15,8 +15,8 @@ Potential Issue: The "1D Branch" of BCResNet uses AdaptiveAvgPool2d((1, None)).
 
 This pools the Frequency height to 1 but keeps the Time width.
 
-Verdict: This should export as a standard AveragePool with a rectangular kernel (e.g., kernel_size=(5, 1)). ESP-DL supports 2D pooling, so this should work.
-
+Verdict: This should export as a standard AveragePool with a rectangular kernel (e.g., kernel_size=(5, 1)). ESP-DL supports 2D pooling, so this should work.  
+Guess you will have to ask  [Espressif](https://github.com/espressif/esp-dl)
 2. The Conversion Workflow (New Step Required)
 You need to set up ESP-PPQ, which is Espressif's quantization tool. It takes your Float32 ONNX model + a few calibration audio files and produces the .espdl file.
 
