@@ -10,8 +10,6 @@ from tqdm import tqdm
 
 from bcresnet import BCResNets
 from utils import CustomAudioDataset, Padding, Preprocess
-
-# ONNX Imports
 import torch.onnx
 from onnxruntime.quantization import quantize_dynamic, QuantType
 
@@ -26,18 +24,19 @@ def get_default_device():
 class Trainer:
     def __init__(self):
         parser = argparse.ArgumentParser()
-        parser.add_argument("--tau", default=1.0, help="model size multiplier", type=float)
-        parser.add_argument("--device", default="auto", type=str, help="Device: 'auto', 'cuda', 'mps', 'cpu'")
+        parser.add_argument("--tau", default=1.0, type=float)
+        parser.add_argument("--device", default="auto", type=str)
         parser.add_argument("--batch_size", default=64, type=int)
         parser.add_argument("--data_root", default="./dataset", type=str)
+        parser.add_argument("--duration", default=1.0, type=float)
+        parser.add_argument("--sample_rate", default=16000, type=int)
+        parser.add_argument("--n_mels", default=80, type=int)
+        parser.add_argument("--no_ssn", action="store_true")
         
-        # Audio Params
-        parser.add_argument("--duration", default=1.0, type=float, help="Audio sample duration in seconds")
-        parser.add_argument("--sample_rate", default=16000, type=int, help="Audio sample rate")
-        parser.add_argument("--n_mels", default=80, type=int, help="Number of Mel bins")
-        
-        # SSN Control
-        parser.add_argument("--no_ssn", action="store_true", help="Disable SubSpectral Normalization")
+        # --- NEW ARGS: Training Hyperparams ---
+        parser.add_argument("--epochs", default=100, type=int, help="Total training epochs")
+        parser.add_argument("--warmup_epochs", default=5, type=int, help="Epochs to warm up learning rate")
+        parser.add_argument("--lr", default=0.1, type=float, help="Initial learning rate")
 
         args = parser.parse_args()
         self.__dict__.update(vars(args))
@@ -45,21 +44,17 @@ class Trainer:
         self.use_ssn = not self.no_ssn
         self.target_samples = int(self.duration * self.sample_rate)
         
-        # --- PRINT CONFIGURATION ---
         print("\n" + "="*40)
         print("      TRAINING CONFIGURATION      ")
         print("="*40)
         print(f"Device       : {self.device}")
-        print(f"Data Root    : {self.data_root}")
         print(f"Duration     : {self.duration}s ({self.target_samples} samples)")
-        print(f"Sample Rate  : {self.sample_rate} Hz")
         print(f"Mel Bins     : {self.n_mels}")
-        print(f"Batch Size   : {self.batch_size}")
-        print(f"Model Tau    : {self.tau}")
-        print(f"Use SSN      : {self.use_ssn}")
+        print(f"Model Tau    : {self.tau} (SSN={self.use_ssn})")
+        print(f"Training     : {self.epochs} Epochs")
+        print(f"Warmup       : {self.warmup_epochs} Epochs (No saving)")
         print("="*40 + "\n")
         
-        # Device Setup
         if self.device == "auto":
             self.device_name = get_default_device()
         else:
@@ -68,8 +63,7 @@ class Trainer:
             self.device_name = "cuda:0"
         try:
             self.device = torch.device(self.device_name)
-        except RuntimeError as e:
-            print(f"Error setting device '{self.device_name}': {e}. Fallback to CPU.")
+        except RuntimeError:
             self.device = torch.device("cpu")
         print(f"Running on device: {self.device}")
         
@@ -78,7 +72,6 @@ class Trainer:
 
     def _load_data(self):
         print(f"Loading data from {self.data_root}...")
-        
         transform = transforms.Compose([Padding(target_len=self.target_samples)])
         
         self.train_dataset = CustomAudioDataset(self.data_root, subset="training", transform=transform, sample_rate=self.sample_rate)
@@ -101,24 +94,11 @@ class Trainer:
         self.preprocess_test = Preprocess(self.device, sample_rate=self.sample_rate, n_mels=self.n_mels, specaug=False)
 
     def _load_model(self):
-        print(f"Building BCResNet-%.1f (SSN={self.use_ssn})..." % self.tau)
+        print(f"Building BCResNet-%.1f..." % self.tau)
         self.model = BCResNets(tau=self.tau, num_classes=self.num_classes, use_ssn=self.use_ssn).to(self.device)
         
-        # --- NEW: Model Structure & Parameter Count ---
-        print("\n" + "-"*40)
-        print("          MODEL SUMMARY           ")
-        print("-" * 40)
-        # Uncomment the line below if you want the full verbose layer printout:
-        # print(self.model) 
-        
         total_params = sum(p.numel() for p in self.model.parameters())
-        trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
-        
-        print(f"Architecture      : BCResNet (tau={self.tau})")
-        print(f"Total Parameters  : {total_params:,}")
-        print(f"Trainable Params  : {trainable_params:,}")
-        print(f"Model Size (est)  : {total_params * 4 / 1024 / 1024:.2f} MB (Float32)")
-        print("-" * 40 + "\n")
+        print(f"Total Parameters: {total_params:,}")
 
     def Test(self, loader):
         self.model.eval()
@@ -136,16 +116,13 @@ class Trainer:
 
     def export_onnx(self):
         print("\n--- Exporting to ONNX ---")
-        
         class EndToEndModel(nn.Module):
             def __init__(self, preprocessor, model):
                 super().__init__()
                 self.preprocessor = preprocessor
                 self.model = model
-            
             def forward(self, x):
-                if x.dim() == 2:
-                    x = x.unsqueeze(1)
+                if x.dim() == 2: x = x.unsqueeze(1)
                 x = self.preprocessor(x) 
                 return self.model(x)
 
@@ -153,72 +130,81 @@ class Trainer:
         preprocessor_cpu = Preprocess(cpu_device, sample_rate=self.sample_rate, n_mels=self.n_mels, specaug=False)
         self.model.to(cpu_device)
         self.model.eval()
-        
         full_model = EndToEndModel(preprocessor_cpu, self.model)
-        
         dummy_input = torch.randn(1, self.target_samples, requires_grad=False).to(cpu_device)
         
-        f32_path = "bcresnet_float32.onnx"
-        int8_path = "bcresnet_int8.onnx"
-        
         try:
-            torch.onnx.export(
-                full_model,
-                dummy_input,
-                f32_path,
-                export_params=True,
-                opset_version=17,
-                do_constant_folding=True,
-                input_names=['audio_input'],
-                output_names=['output'],
-                dynamic_axes={'audio_input': {0: 'batch_size'}, 'output': {0: 'batch_size'}}
-            )
-            print(f"[Success] Saved Float32 ONNX: {f32_path}")
+            torch.onnx.export(full_model, dummy_input, "bcresnet_float32.onnx", export_params=True, opset_version=17,
+                              input_names=['audio_input'], output_names=['output'],
+                              dynamic_axes={'audio_input': {0: 'batch'}, 'output': {0: 'batch'}})
+            print("[Success] Saved Float32 ONNX")
         except Exception as e:
-            print(f"[Error] Failed to export Float32 ONNX: {e}")
-            return
+            print(f"[Error] Float32 Export: {e}")
 
         try:
-            print("Quantizing to Int8...")
-            quantize_dynamic(
-                model_input=f32_path,
-                model_output=int8_path,
-                weight_type=QuantType.QUInt8 
-            )
-            print(f"[Success] Saved Int8 ONNX: {int8_path}")
-            size_f32 = os.path.getsize(f32_path) / 1024
-            size_int8 = os.path.getsize(int8_path) / 1024
-            print(f"Size Reduction: {size_f32:.2f} KB -> {size_int8:.2f} KB")
+            quantize_dynamic("bcresnet_float32.onnx", "bcresnet_int8.onnx", weight_type=QuantType.QUInt8)
+            print("[Success] Saved Int8 ONNX")
         except Exception as e:
-            print(f"[Error] Failed to quantize ONNX: {e}")
+            print(f"[Error] Quantization: {e}")
 
     def __call__(self):
-        optimizer = torch.optim.SGD(self.model.parameters(), lr=0.1, weight_decay=1e-4, momentum=0.9)
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=100)
+        # Initial setup
+        optimizer = torch.optim.SGD(self.model.parameters(), lr=0, weight_decay=1e-4, momentum=0.9)
+        
+        # Calculate steps for manual scheduler
+        steps_per_epoch = len(self.train_loader)
+        warmup_steps = steps_per_epoch * self.warmup_epochs
+        total_steps = steps_per_epoch * self.epochs
+        global_step = 0
+        
         best_acc = 0.0
         
-        for epoch in range(1, 101):
+        for epoch in range(1, self.epochs + 1):
             self.model.train()
-            loop = tqdm(self.train_loader, desc=f"Epoch {epoch}")
+            loop = tqdm(self.train_loader, desc=f"Epoch {epoch}/{self.epochs}")
+            
             for inputs, labels in loop:
                 inputs, labels = inputs.to(self.device), labels.to(self.device)
                 inputs = self.preprocess_train(inputs, augment=True)
+                
+                # --- MANUAL LR SCHEDULER (Warmup + Cosine) ---
+                global_step += 1
+                if global_step < warmup_steps:
+                    # Linear Warmup
+                    lr = self.lr * global_step / warmup_steps
+                else:
+                    # Cosine Decay
+                    progress = (global_step - warmup_steps) / (total_steps - warmup_steps)
+                    lr = self.lr * 0.5 * (1 + np.cos(np.pi * progress))
+                
+                for param_group in optimizer.param_groups:
+                    param_group['lr'] = lr
+                # ---------------------------------------------
+
                 optimizer.zero_grad()
                 outputs = self.model(inputs)
                 loss = F.cross_entropy(outputs, labels)
                 loss.backward()
                 optimizer.step()
-                loop.set_postfix(loss=loss.item())
+                
+                loop.set_postfix(loss=loss.item(), lr=lr)
 
-            scheduler.step()
+            # Validation
             val_acc = self.Test(self.valid_loader)
-            print(f"Epoch {epoch} | Val Acc: {val_acc:.2f}%")
             
-            if val_acc > best_acc:
-                best_acc = val_acc
-                torch.save(self.model.state_dict(), "best_bcresnet.pth")
-                print(f">>> Saved Best Model ({best_acc:.2f}%)")
+            # --- SAVE GUARD ---
+            # Only save if we are PAST the warmup phase
+            if epoch > self.warmup_epochs:
+                if val_acc > best_acc:
+                    best_acc = val_acc
+                    torch.save(self.model.state_dict(), "best_bcresnet.pth")
+                    print(f"Epoch {epoch} | Val Acc: {val_acc:.2f}% (New Best!)")
+                else:
+                    print(f"Epoch {epoch} | Val Acc: {val_acc:.2f}%")
+            else:
+                print(f"Epoch {epoch} | Val Acc: {val_acc:.2f}% (Warmup - Saving Skipped)")
         
+        # End of training
         self.model.load_state_dict(torch.load("best_bcresnet.pth", map_location=self.device))
         self.export_onnx()
 
