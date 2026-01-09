@@ -117,7 +117,6 @@ Argument	Default	Description
 --batch_size	64	Training batch size.  
 --device	auto	Force device: cuda, mps (Mac), cpu, or auto.  
 
-Export to Sheets
 
 ⚠️ Important: The "Vanishing Frequency" Problem
 If you wish to use 40 Mel Bins (common for microcontrollers), you MUST use the --no_ssn flag. Here is the deep technical reason why:
