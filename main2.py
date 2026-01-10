@@ -41,7 +41,7 @@ class Trainer:
         
         parser.add_argument("--epochs", default=100, type=int)
         parser.add_argument("--warmup_epochs", default=5, type=int)
-        parser.add_argument("--lr", default=0.1, type=float)
+        parser.add_argument("--lr", default=0.005, type=float)
         parser.add_argument("--patience", default=15, type=int)
 
         args = parser.parse_args()
