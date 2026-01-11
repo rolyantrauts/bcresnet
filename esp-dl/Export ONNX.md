@@ -5,7 +5,8 @@ Python
 
 # Python export snippet
 dummy_input = torch.randn(1, 1, 40, 64) # Example 64 frame context
-torch.onnx.export(model, dummy_input, "bcresnet.onnx", ...)
+torch.onnx.export(model, dummy_input, "bcresnet.onnx", ...)  
+
 Step 2: Quantize & Generate Code (ESP-PPQ)
 Use the Espressif PPQ quantization tool to convert the ONNX to ESP-DL compatible C++ code.
 
