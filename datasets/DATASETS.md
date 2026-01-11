@@ -1,4 +1,5 @@
-🏠 Domestic Room Impulse Response (RIR) GeneratorThis utility generates a dataset of 10,000 Room Impulse Responses (RIRs) specifically designed to mimic domestic environments and smart speaker usage scenarios.  
+🏠 Domestic Room Impulse Response (RIR) Generator
+This utility generates a dataset of 10,000 Room Impulse Responses (RIRs) specifically designed to mimic domestic environments and smart speaker usage scenarios.  
 Unlike generic RIR generators that often place microphones in the center of empty rooms, this script focuses on realistic constraints:Rooms: Living rooms, bedrooms, kitchens ($3m \times 3m$ to $8m \times 8m$).  
 Acoustics: Furnished rooms with realistic $T_{60}$ times ($0.2s - 0.6s$).Placement Logic: Microphones are placed on shelves or tables near walls, rather than floating in mid-air.  
 🎯 Key FeaturesRealistic Domestic Rooms: Simulates dimensions typical of residential spaces.  
