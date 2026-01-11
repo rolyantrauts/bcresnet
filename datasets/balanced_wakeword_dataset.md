@@ -6,7 +6,6 @@ Visualization	UMAP	Best for Dimensionality Reduction. Projects high-dimensional 
 Search/Mining	Faiss (Facebook)	Best for Hard Mining. efficiently finds the "nearest neighbors" to your wakeword.
 Data Cleaning	Cleanlab	Automatically detects mislabeled data (e.g., a "Silence" file that actually contains a cough).
 
-Export to Sheets
 
 2. The Analysis Workflow
 Phase A: Analyze Silence & Noise (YAMNet + UMAP)
