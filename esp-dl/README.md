@@ -39,4 +39,4 @@ Change: opset_version=13 in torch.onnx.export.
 
 Also due to op problems log mels will have to be calculated externally using main2.py than the internal torch methods of main.py.
 https://github.com/espressif/esp-dl/tree/master/esp-dl/audio for a esp front-end.
-
+AudioFrontEnd.cpp has been included as when training you need the exact same methods as on the resultant ESP32 process for maximum accuracy.
