@@ -1,13 +1,13 @@
-1. The Toolset
-Task	Recommended Tool	Why?
-Vectorization	Wav2Vec 2.0 (HuggingFace)	Best for Speech/Adversarial.
-It maps audio to phonetic space, so "Jarvis" and "Harvest" appear close together.
-Categorization	YAMNet or VGGish	Best for Noise/Silence.
-Distinguishes "Silence" from "Fan Noise" or "Traffic".
-Visualization	UMAP	Best for Dimensionality Reduction.
-Projects high-dimensional vectors (e.g., 768-d) into 2D points you can see.
-Search/Mining	Faiss (Facebook)	Best for Hard Mining.
-efficiently finds the "nearest neighbors" to your wakeword.
+1. The Toolset  
+Task	Recommended Tool	Why?  
+Vectorization	Wav2Vec 2.0 (HuggingFace)	Best for Speech/Adversarial.  
+It maps audio to phonetic space, so "Jarvis" and "Harvest" appear close together.  
+Categorization	YAMNet or VGGish	Best for Noise/Silence.  
+Distinguishes "Silence" from "Fan Noise" or "Traffic".  
+Visualization	UMAP	Best for Dimensionality Reduction.  
+Projects high-dimensional vectors (e.g., 768-d) into 2D points you can see.  
+Search/Mining	Faiss (Facebook)	Best for Hard Mining.  
+efficiently finds the "nearest neighbors" to your wakeword.  
 Data Cleaning	Cleanlab	Automatically detects mislabeled data (e.g., a "Silence" file that actually contains a cough).
 
 
