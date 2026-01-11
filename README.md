@@ -168,9 +168,33 @@ bcresnet_float32.onnx
 
 Standard ONNX model. Perfect for Raspberry Pi, Linux, or Mac deployment.
 
-bcresnet_int8.onnx
+bcresnet_int8.onnx  
 
-Quantized model. Typically 4x smaller in file size and runs faster on CPUs (like the Pi Zero 2) with minimal accuracy loss.
+Why ONNX f32 runs fast on ARM  
+(The "NEON" Factor)
+You might assume that 8-bit integers (int8) are always faster than 32-bit floats (f32).  
+While true on dedicated NPU hardware (like the ethos-u on some microcontrollers), on general-purpose ARM chips (Cortex-A series found in Raspberry Pi, phones, etc.), f32 is incredibly optimized  
+A. The NEON FPU is Native to FloatEvery modern ARM core has a NEON unit (Advanced SIMD).  
+The Architecture: NEON registers are 128-bits wide.Vectorization: They can hold four 32-bit floats at once.Optimization: ARM has spent 15+ years optimizing the instruction set for single-precision float math.  
+Operations like FMLA (Floating-point Fused Multiply-Add) can execute in a single clock cycle, doing 4 multiplications and 4 additions simultaneously.  
+The Result: Standard math libraries (OpenBLAS, Eigen, XNNPACK) used by ONNX Runtime maximize this f32 throughput effortlessly.B.   
+The int8 "Trap" on Older ARMIf you quantize a model to int8 on an ARM chip that lacks specific "Dot Product" instructions (like older Cortex-A53/A72 chips found in Raspberry Pi 3/4), the CPU actually struggles:No Native Instruction:   
+It cannot do "multiply 8-bit by 8-bit and add to 32-bit accumulator" in one step.Up-casting: It has to spend cycles converting the int8 numbers back up to int16 or int32 just to do the math safely without overflowing.  
+Shuffle Overhead: It spends time moving bits around registers.Conclusion: On many ARM CPUs, highly optimized f32 code beats unoptimized or non-hardware-accelerated int8 code because the FPU is a "first-class citizen" and the integer unit is working via workarounds.  
+2. Why esp-dl Expects f32 InputsEven though the ESP32-S3 (and esp-dl) runs the layers of the neural network in highly efficient int8 or int16, the interface expects f32.  
+A. The Audio Feature RealityYour audio frontend (the code we wrote earlier) outputs Log Mel Spectrograms.  
+These are rarely nice round integers. They are values like -1.45, 0.003, 12.5.Spectrogram calculation involves cos, log, and norm—operations that require floating-point precision to maintain dynamic range.  
+If you truncated these to integers before giving them to the library, you would lose massive amounts of quiet signal information (the "spectral whitespace" we discussed).  
+B. The "Input Quantizer" NodeThe esp-dl framework (and models optimized via esp-ppq) includes a specialized input layer, effectively a bridge:  
+Input: You provide float *data (High precision, dynamic range).Scale & Shift: The first layer of the model applies a pre-calculated scale factor.Example: Input (-2.0 to 2.0) $\times$ Scale (30) $\rightarrow$ Internal Int8 (-60 to 60).  
+Processing: The rest of the network (Conv2D, etc.) runs in super-fast int8/int16 using the ESP32-S3's vector instructions.  
+C. CalibrationTo know how to convert that float to an int, the esp-ppq tool runs a calibration step during export. It feeds thousands of f32 samples through the model to see the min/max values. It needs the input to be f32 so it can calculate that scale factor precisely.  
+Summary TableFeature
+ARM (Raspberry Pi/Mobile)  
+ESP32-S3 (esp-dl)   
+Why f32? Hardware Maturity: NEON FPUs are blazing fast and software libraries (BLAS) are fully optimized for f32 vectors.  
+Precision Handoff: Audio features are naturally floats. The framework handles the "Float $\to$ Int" conversion internally to preserve accuracy.  
+Why not int8?Instruction Gaps: Without sdot instructions, int8 can be slower due to casting overhead.Usage: It does use int/int8 internally! It just hides it behind an f32 API for ease of use.
 
 📝 License
 This project is based on the original [BCResNet](https://github.com/Qualcomm-AI-research/bcresnet) implementation.   
