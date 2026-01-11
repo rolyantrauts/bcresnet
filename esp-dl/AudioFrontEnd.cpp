@@ -1,5 +1,5 @@
 // C++ Audio Front End (AudioFrontEnd.cpp)
-// This implementation mimics the esp-dl / esp-sr pipeline:
+// This implementation mimics the esp-dl / esp-sr pipeline:https://github.com/espressif/esp-dl/tree/master/esp-dl/audio
 //
 // Pre-emphasis (Optional, often skipped in modern BCResNet, but included if esp-dl uses it).
 // 
