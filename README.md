@@ -174,10 +174,10 @@ Quantized model. Typically 4x smaller in file size and runs faster on CPUs (like
 
 📝 License
 This project is based on the original [BCResNet](https://github.com/Qualcomm-AI-research/bcresnet) implementation.   
-
-🧠 Understanding Hyperparameters: LR, Epochs, and Stability
-https://github.com/rolyantrauts/bcresnet/discussions/2
-🎙️ Designing the Perfect Wake Word: Phonetics & Strategy
-https://github.com/rolyantrauts/bcresnet/discussions/3
-🏠 Domestic Room Impulse Response (RIR) Generator
-https://github.com/rolyantrauts/bcresnet/blob/main/datasets/DATASETS.md
+  
+🧠 Understanding Hyperparameters: LR, Epochs, and Stability  
+https://github.com/rolyantrauts/bcresnet/discussions/2  
+🎙️ Designing the Perfect Wake Word: Phonetics & Strategy  
+https://github.com/rolyantrauts/bcresnet/discussions/3  
+🏠 Domestic Room Impulse Response (RIR) Generator  
+https://github.com/rolyantrauts/bcresnet/blob/main/datasets/DATASETS.md  
