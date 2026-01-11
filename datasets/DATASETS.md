@@ -1,20 +1,5 @@
-Random Domestic Rooms: Living rooms, bedrooms, kitchens (approx 3m-8m sizes).
-
-Realistic RT60: 0.2s to 0.6s (furnished rooms).
-
-Smart Placement:
-
-Microphone: Placed near walls (mimicking shelves/sideboards) at table height.
-
-Voice: Placed at sitting or standing height, maintained at a realistic distance from the mic.
-
-Noise: Randomly placed (TV, window, appliances).
-
-Placement Logic: A pure random generator (like the generic RoomSimulator) might put your smart speaker in the middle of the room floating in mid-air. This script forces the mic to be 0.1m - 0.5m from a wall and on a "table" surface (z=0.7-1.2m), which drastically changes the early reflections compared to a center-room mic.
-
-Voice vs Noise: By generating two separate RIR files for the same room (one for voice, one for noise), you can mix them dynamically during training. This allows you to say "I want the voice at 0dB and the TV noise at -5dB" and mix them accurately because they share the same acoustic room properties.
-```
-import numpy as np
+🏠 Domestic Room Impulse Response (RIR) GeneratorThis utility generates a dataset of 10,000 Room Impulse Responses (RIRs) specifically designed to mimic domestic environments and smart speaker usage scenarios.Unlike generic RIR generators that often place microphones in the center of empty rooms, this script focuses on realistic constraints:Rooms: Living rooms, bedrooms, kitchens ($3m \times 3m$ to $8m \times 8m$).Acoustics: Furnished rooms with realistic $T_{60}$ times ($0.2s - 0.6s$).Placement Logic: Microphones are placed on shelves or tables near walls, rather than floating in mid-air.🎯 Key FeaturesRealistic Domestic Rooms: Simulates dimensions typical of residential spaces.Smart Speaker Placement: Forces microphone placement near walls ($0.1m - 0.5m$) at table/shelf height ($0.7m - 1.2m$), significantly affecting early reflections.Dual RIR Generation: Generates separate RIR files for Voice and Noise for the same room configuration.Why? This allows dynamic mixing during training. You can mix the Voice at 0dB and Noise at -5dB accurately because they share the exact same acoustic room properties.Source Constraints:Voice: Placed at sitting/standing height ($1.0m - 1.8m$) with a minimum distance check to avoid "inside the mic" artifacts.Noise: Placed randomly (e.g., simulating TV, window, appliances).🛠 PrerequisitesYou will need the following Python libraries:Bashpip install numpy pyroomacoustics scipy tqdm audiomentations
+📄 Generation ScriptSave the following code as generate_rirs.py and run it to create your dataset.Pythonimport numpy as np
 import pyroomacoustics as pra
 from scipy.io import wavfile
 import os
@@ -166,22 +151,16 @@ for i in tqdm(range(NUM_RIRS)):
         continue
 
 print("Done!")
-```
-
-How to use this with audiomentations
-Once you have generated this folder of RIRs, you can load them into your training pipeline using audiomentations like this:
-
-```
-from audiomentations import ApplyImpulseResponse, Compose
+🚀 Usage with AudiomentationsOnce you have generated the folder of RIRs (e.g., domestic_rirs_dataset), you can integrate them into your training pipeline using audiomentations.Pythonfrom audiomentations import ApplyImpulseResponse, Compose
 
 augment = Compose([
     ApplyImpulseResponse(
         ir_path="domestic_rirs_dataset", # Path to the folder created above
         p=0.5
     ),
-    # Add AddBackgroundNoise here using your noise dataset if needed
+    # You can combine this with background noise injection
+    # AddBackgroundNoise(...)
 ])
 
-# Usage
+# Example Usage
 # augmented_audio = augment(samples=audio_waveform, sample_rate=16000)
-```
