@@ -177,8 +177,8 @@ While true on dedicated NPU hardware (like the ethos-u on some microcontrollers)
 A. The NEON FPU is Native to FloatEvery modern ARM core has a NEON unit (Advanced SIMD).  
 The Architecture: NEON registers are 128-bits wide.Vectorization: They can hold four 32-bit floats at once.Optimization: ARM has spent 15+ years optimizing the instruction set for single-precision float math.  
 Operations like FMLA (Floating-point Fused Multiply-Add) can execute in a single clock cycle, doing 4 multiplications and 4 additions simultaneously.  
-The Result: Standard math libraries (OpenBLAS, Eigen, XNNPACK) used by ONNX Runtime maximize this f32 throughput effortlessly.B.   
-The int8 "Trap" on Older ARMIf you quantize a model to int8 on an ARM chip that lacks specific "Dot Product" instructions (like older Cortex-A53/A72 chips found in Raspberry Pi 3/4), the CPU actually struggles:No Native Instruction:   
+The Result: Standard math libraries (OpenBLAS, Eigen, XNNPACK) used by ONNX Runtime maximize this f32 throughput effortlessly.  
+B. The int8 "Trap" on Older ARMIf you quantize a model to int8 on an ARM chip that lacks specific "Dot Product" instructions (like older Cortex-A53/A72 chips found in Raspberry Pi 3/4), the CPU actually struggles:No Native Instruction:   
 It cannot do "multiply 8-bit by 8-bit and add to 32-bit accumulator" in one step.Up-casting: It has to spend cycles converting the int8 numbers back up to int16 or int32 just to do the math safely without overflowing.  
 Shuffle Overhead: It spends time moving bits around registers.Conclusion: On many ARM CPUs, highly optimized f32 code beats unoptimized or non-hardware-accelerated int8 code because the FPU is a "first-class citizen" and the integer unit is working via workarounds.  
 2. Why esp-dl Expects f32 InputsEven though the ESP32-S3 (and esp-dl) runs the layers of the neural network in highly efficient int8 or int16, the interface expects f32.  
