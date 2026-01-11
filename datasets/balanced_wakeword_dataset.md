@@ -12,7 +12,7 @@ Data Cleaning	Cleanlab	Automatically detects mislabeled data (e.g., a "Silence" 
 
 
 3. The Analysis Workflow
-Phase A: Analyze Silence & Noise (YAMNet + UMAP)
+Phase A: Analyze Silence & Noise (YAMNet + UMAP)  
 You want to ensure your "Silence" isn't just digital zeros (perfect silence) but includes "room tone," and that your noise is diverse.
 
 Embed: Run all files in 03_background through YAMNet.
