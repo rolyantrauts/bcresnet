@@ -1,3 +1,29 @@
+// C++ Audio Front End (AudioFrontEnd.cpp)
+// This implementation mimics the esp-dl / esp-sr pipeline:
+//
+// Pre-emphasis (Optional, often skipped in modern BCResNet, but included if esp-dl uses it).
+// 
+// Framing: Buffering streaming audio into overlapping windows.
+//
+// Windowing: Applying a Hanning window.
+// 
+// FFT: Computing the Power Spectrum.
+// 
+// Mel Filterbank: Converting to Mel scale (Standard Slaney or HTK).
+// 
+// Logarithm: Log10 of the energy.
+// Key Details Matched to esp-dl / main3.py logic:
+// Streaming Architecture: The input_buffer_ management mimics the ring buffer behavior required for "true 20ms streaming". Even though the window (e.g., 32ms) is larger than the update rate (20ms), the frontend produces one output vector per 20ms input.
+// 
+// Normalization: Input int16_t is normalized by 32768.0f to standard float range [-1, 1] before FFT.
+//
+// Mel Filters: The Slaney-style triangular filters are generated dynamically. esp-dl often stores these as pre-computed tables (LUTs) for speed, but the math is identical.
+//
+// Integration: If you are using this for training, you can wrap this class using pybind11 to replace torchaudio transforms in your dataloader, ensuring that your training data sees exactly what the C++ inference engine will see.
+//
+// The esp-dl library on the ESP32 often utilizes the dsps_fft_s16_ae32 (fixed point) or dsps_fft_2r_fc32 (float) functions from esp-dsp. 
+// The implementation above uses float (comparable to dsps_fft_2r_fc32) which is the recommended path for the BCResNet implementation to maintain accuracy with the PyTorch export.
+
 #include <iostream>
 #include <vector>
 #include <cmath>
