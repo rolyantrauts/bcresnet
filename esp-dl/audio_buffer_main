@@ -1,0 +1,44 @@
+#include "AudioRingBuffer.hpp"
+
+// 4 Seconds buffer (128 KB) to be safe
+// 4 * 16000 * 2 bytes = 128,000 bytes -> rounds up to 131,072 bytes
+AudioRingBuffer *ringBuffer;
+
+void setup() {
+    Serial.begin(115200);
+    
+    // Initialize PSRAM Buffer
+    ringBuffer = new AudioRingBuffer(130000); 
+    
+    // ... I2S setup ...
+}
+
+void loop() {
+    // 1. Read from I2S
+    int16_t i2s_data[512];
+    size_t bytes_read = 0;
+    i2s_read(I2S_NUM_0, i2s_data, sizeof(i2s_data), &bytes_read, portMAX_DELAY);
+    
+    // 2. Push to Ring Buffer (Always running)
+    ringBuffer->write(i2s_data, bytes_read / 2);
+
+    // 3. Run Inference (Pseudo-code)
+    float confidence = run_bcresnet_inference(i2s_data);
+
+    // 4. Trigger!
+    if (confidence > 0.85) {
+        Serial.println("Wakeword Detected!");
+        
+        // Allocate a temporary linear buffer for the 2.0s clip (1.5s + margins)
+        // We can put this in PSRAM too!
+        size_t eventSize = 2.0 * 16000;
+        int16_t* eventAudio = (int16_t*)heap_caps_malloc(eventSize * 2, MALLOC_CAP_SPIRAM);
+        
+        // Extract linear audio (unwraps the ring buffer for you)
+        ringBuffer->extractLast(2.0, eventAudio);
+        
+        // ... Save eventAudio to SD Card or Upload ...
+        
+        free(eventAudio);
+    }
+}
