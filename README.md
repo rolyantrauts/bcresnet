@@ -188,13 +188,16 @@ Shuffle Overhead: It spends time moving bits around registers.
 On many ARM CPUs, highly optimized f32 code beats unoptimized or non-hardware-accelerated int8 code because the FPU is a "first-class citizen" and the integer unit is working via workarounds.  
 2. Why esp-dl Expects f32 Inputs  
 Even though the ESP32-S3 (and esp-dl) runs the layers of the neural network in highly efficient int8 or int16, the interface expects f32.  
-A. The Audio Feature RealityYour audio frontend (the code we wrote earlier) outputs Log Mel Spectrograms.  
+A. The Audio Feature Reality  
+Your audio frontend (the code we wrote earlier) outputs Log Mel Spectrograms.  
 These are rarely nice round integers. They are values like -1.45, 0.003, 12.5.Spectrogram calculation involves cos, log, and norm—operations that require floating-point precision to maintain dynamic range.  
 If you truncated these to integers before giving them to the library, you would lose massive amounts of quiet signal information (the "spectral whitespace" we discussed).  
-B. The "Input Quantizer" NodeThe esp-dl framework (and models optimized via esp-ppq) includes a specialized input layer, effectively a bridge:  
+B. The "Input Quantizer" Node  
+The esp-dl framework (and models optimized via esp-ppq) includes a specialized input layer, effectively a bridge:  
 Input: You provide float *data (High precision, dynamic range).Scale & Shift: The first layer of the model applies a pre-calculated scale factor.Example: Input (-2.0 to 2.0) $\times$ Scale (30) $\rightarrow$ Internal Int8 (-60 to 60).  
 Processing: The rest of the network (Conv2D, etc.) runs in super-fast int8/int16 using the ESP32-S3's vector instructions.  
-C. CalibrationTo know how to convert that float to an int, the esp-ppq tool runs a calibration step during export. It feeds thousands of f32 samples through the model to see the min/max values. It needs the input to be f32 so it can calculate that scale factor precisely.  
+C. Calibration  
+To know how to convert that float to an int, the esp-ppq tool runs a calibration step during export. It feeds thousands of f32 samples through the model to see the min/max values. It needs the input to be f32 so it can calculate that scale factor precisely.  
   
 ARM (Raspberry Pi/Mobile)  
 Why f32? Hardware Maturity: NEON FPUs are blazing fast and software libraries (BLAS) are fully optimized for f32 vectors.     
