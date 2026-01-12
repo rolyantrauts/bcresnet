@@ -193,7 +193,7 @@ B. The "Input Quantizer" NodeThe esp-dl framework (and models optimized via esp-
 Input: You provide float *data (High precision, dynamic range).Scale & Shift: The first layer of the model applies a pre-calculated scale factor.Example: Input (-2.0 to 2.0) $\times$ Scale (30) $\rightarrow$ Internal Int8 (-60 to 60).  
 Processing: The rest of the network (Conv2D, etc.) runs in super-fast int8/int16 using the ESP32-S3's vector instructions.  
 C. CalibrationTo know how to convert that float to an int, the esp-ppq tool runs a calibration step during export. It feeds thousands of f32 samples through the model to see the min/max values. It needs the input to be f32 so it can calculate that scale factor precisely.  
-Summary TableFeature
+  
 ARM (Raspberry Pi/Mobile)  
 Why f32? Hardware Maturity: NEON FPUs are blazing fast and software libraries (BLAS) are fully optimized for f32 vectors. ESP32-S3 (esp-dl)   
 Why not int8? Instruction Gaps: Without sdot instructions, int8 can be slower due to casting overhead.  
