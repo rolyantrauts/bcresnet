@@ -195,7 +195,7 @@ Processing: The rest of the network (Conv2D, etc.) runs in super-fast int8/int16
 C. CalibrationTo know how to convert that float to an int, the esp-ppq tool runs a calibration step during export. It feeds thousands of f32 samples through the model to see the min/max values. It needs the input to be f32 so it can calculate that scale factor precisely.  
   
 ARM (Raspberry Pi/Mobile)  
-Why f32? Hardware Maturity: NEON FPUs are blazing fast and software libraries (BLAS) are fully optimized for f32 vectors. ESP32-S3 (esp-dl)   
+Why f32? Hardware Maturity: NEON FPUs are blazing fast and software libraries (BLAS) are fully optimized for f32 vectors.     
 Why not int8? Instruction Gaps: Without sdot instructions, int8 can be slower due to casting overhead.  
 ESP32-S3 (esp-dl)  
 Precision Handoff: Audio features are naturally floats. The framework handles the "Float $\to$ Int" conversion internally to preserve accuracy.  
