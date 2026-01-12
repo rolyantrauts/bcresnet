@@ -208,4 +208,6 @@ This project is based on the original [BCResNet](https://github.com/Qualcomm-AI-
  
 🎙️ [Designing the Perfect Wake Word: Phonetics & Strategy](https://github.com/rolyantrauts/bcresnet/discussions/3)  
   
-🏠 [Domestic Room Impulse Response (RIR) Generator](https://github.com/rolyantrauts/bcresnet/blob/main/datasets/Room_Impulse_Response_(RIR)_Generator.md)
+🏠 [Domestic Room Impulse Response (RIR) Generator](https://github.com/rolyantrauts/bcresnet/blob/main/datasets/Room_Impulse_Response_(RIR)_Generator.md)  
+
+🔊 [Calculate the embeddings on your own sound data](https://colab.research.google.com/drive/1E3CaPAqCai9P9QhJ3WYPNCVmrJU4lAhF)
