@@ -184,8 +184,10 @@ Operations like FMLA (Floating-point Fused Multiply-Add) can execute in a single
 The Result: Standard math libraries (OpenBLAS, Eigen, XNNPACK) used by ONNX Runtime maximize this f32 throughput effortlessly.  
 B. The int8 "Trap" on Older ARMIf you quantize a model to int8 on an ARM chip that lacks specific "Dot Product" instructions (like older Cortex-A53/A72 chips found in Raspberry Pi 3/4), the CPU actually struggles:No Native Instruction:   
 It cannot do "multiply 8-bit by 8-bit and add to 32-bit accumulator" in one step.Up-casting: It has to spend cycles converting the int8 numbers back up to int16 or int32 just to do the math safely without overflowing.  
-Shuffle Overhead: It spends time moving bits around registers.Conclusion: On many ARM CPUs, highly optimized f32 code beats unoptimized or non-hardware-accelerated int8 code because the FPU is a "first-class citizen" and the integer unit is working via workarounds.  
-2. Why esp-dl Expects f32 InputsEven though the ESP32-S3 (and esp-dl) runs the layers of the neural network in highly efficient int8 or int16, the interface expects f32.  
+Shuffle Overhead: It spends time moving bits around registers.  
+On many ARM CPUs, highly optimized f32 code beats unoptimized or non-hardware-accelerated int8 code because the FPU is a "first-class citizen" and the integer unit is working via workarounds.  
+2. Why esp-dl Expects f32 Inputs  
+Even though the ESP32-S3 (and esp-dl) runs the layers of the neural network in highly efficient int8 or int16, the interface expects f32.  
 A. The Audio Feature RealityYour audio frontend (the code we wrote earlier) outputs Log Mel Spectrograms.  
 These are rarely nice round integers. They are values like -1.45, 0.003, 12.5.Spectrogram calculation involves cos, log, and norm—operations that require floating-point precision to maintain dynamic range.  
 If you truncated these to integers before giving them to the library, you would lose massive amounts of quiet signal information (the "spectral whitespace" we discussed).  
