@@ -189,7 +189,7 @@ On many ARM CPUs, highly optimized f32 code beats unoptimized or non-hardware-ac
 2. Why esp-dl Expects f32 Inputs  
 Even though the ESP32-S3 (and esp-dl) runs the layers of the neural network in highly efficient int8 or int16, the interface expects f32.  
 A. The Audio Feature Reality  
-Your audio frontend (the code we wrote earlier) outputs Log Mel Spectrograms.  
+Your audio frontend outputs Log Mel Spectrograms.  
 These are rarely nice round integers. They are values like -1.45, 0.003, 12.5.Spectrogram calculation involves cos, log, and norm—operations that require floating-point precision to maintain dynamic range.  
 If you truncated these to integers before giving them to the library, you would lose massive amounts of quiet signal information (the "spectral whitespace" we discussed).  
 B. The "Input Quantizer" Node  
