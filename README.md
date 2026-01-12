@@ -191,7 +191,7 @@ Even though the ESP32-S3 (and esp-dl) runs the layers of the neural network in h
 A. The Audio Feature Reality  
 Your audio frontend outputs Log Mel Spectrograms.  
 These are rarely nice round integers. They are values like -1.45, 0.003, 12.5.Spectrogram calculation involves cos, log, and norm—operations that require floating-point precision to maintain dynamic range.  
-If you truncated these to integers before giving them to the library, you would lose massive amounts of quiet signal information (the "spectral whitespace" we discussed).  
+If you truncated these to integers before giving them to the library, you would lose massive amounts of quiet signal information (the "spectral whitespace").  
 B. The "Input Quantizer" Node  
 The esp-dl framework (and models optimized via esp-ppq) includes a specialized input layer, effectively a bridge:  
 Input: You provide float *data (High precision, dynamic range).Scale & Shift: The first layer of the model applies a pre-calculated scale factor.Example: Input (-2.0 to 2.0) $\times$ Scale (30) $\rightarrow$ Internal Int8 (-60 to 60).  
