@@ -1,3 +1,5 @@
+https://github.com/rolyantrauts/bcresnet/blob/main/datasets/balance_audio.py added as an example cluster balancing alg
+
 1. The Toolset  
 Task	Recommended Tool	Why?  
 Vectorization	Wav2Vec 2.0 (HuggingFace)	Best for Speech/Adversarial.  
