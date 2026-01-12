@@ -194,7 +194,8 @@ These are rarely nice round integers. They are values like -1.45, 0.003, 12.5.Sp
 If you truncated these to integers before giving them to the library, you would lose massive amounts of quiet signal information (the "spectral whitespace").  
 B. The "Input Quantizer" Node  
 The esp-dl framework (and models optimized via esp-ppq) includes a specialized input layer, effectively a bridge:  
-Input: You provide float *data (High precision, dynamic range).Scale & Shift: The first layer of the model applies a pre-calculated scale factor.Example: Input (-2.0 to 2.0) $\times$ Scale (30) $\rightarrow$ Internal Int8 (-60 to 60).  
+Input: You provide float *data (High precision, dynamic range).Scale & Shift: The first layer of the model applies a pre-calculated scale factor.  
+Example: Input (-2.0 to 2.0) $\times$ Scale (30) $\rightarrow$ Internal Int8 (-60 to 60).  
 Processing: The rest of the network (Conv2D, etc.) runs in super-fast int8/int16 using the ESP32-S3's vector instructions.  
 C. Calibration  
 To know how to convert that float to an int, the esp-ppq tool runs a calibration step during export. It feeds thousands of f32 samples through the model to see the min/max values. It needs the input to be f32 so it can calculate that scale factor precisely.  
