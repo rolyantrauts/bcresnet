@@ -76,6 +76,8 @@ This configuration uses 80 Mel bins and Sub-Spectral Normalization (SSN). This p
 ```
 python main2.py --data_root ./dataset --duration 1.5 --n_mels 80
 ```
+`main3.py` creates the streaming version of the model  
+
 Understanding the Parameters:
 
 --duration 1.5:
@@ -104,6 +106,8 @@ This configuration uses 40 Mel bins and disables SSN. Use this if you are target
 ```
 python main2.py --data_root ./dataset --n_mels 40 --no_ssn
 ```
+`main3.py` for streaming version  
+
 ⚙️ Input Parameters
 
 --data_root	./dataset	Path to your dataset root folder.  
