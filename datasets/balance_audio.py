@@ -89,6 +89,7 @@ class Cnn14_Embedder(nn.Module):
 def get_args():
     parser = argparse.ArgumentParser(description="Balance audio dataset using PANNs (CNN) Embeddings.")
     parser.add_argument("--root_dir", type=str, required=True, help="Path to the directory containing .wav files")
+    # Default set back to 10.0 seconds
     parser.add_argument("--min_duration", type=float, default=10.0, help="Files shorter than this are deleted immediately")
     parser.add_argument("--manual_k", type=int, default=0, help="Set a fixed K (e.g., 10). If 0 (default), uses Fast Auto-Estimation.")
     parser.add_argument("--output_file", type=str, default="delete_list.txt", help="Path to save the list")
