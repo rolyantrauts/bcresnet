@@ -166,8 +166,11 @@ for i in tqdm(range(NUM_RIRS)):
 
 print("Done!")
 ```
-🚀 Usage with AudiomentationsOnce you have generated the folder of RIRs (e.g., domestic_rirs_dataset), you can integrate them into your training pipeline using audiomentations.Pythonfrom audiomentations import ApplyImpulseResponse, Compose
+🚀 Usage with AudiomentationsOnce you have generated the folder of RIRs (e.g., domestic_rirs_dataset), you can integrate them into your training pipeline using audiomentations.  
+
 ```
+from audiomentations import ApplyImpulseResponse, Compose
+
 augment = Compose([
     ApplyImpulseResponse(
         ir_path="domestic_rirs_dataset", # Path to the folder created above
