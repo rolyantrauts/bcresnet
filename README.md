@@ -209,7 +209,9 @@ Usage: It does use int/int8 internally! It just hides it behind an f32 API for e
 
 Log Mel vs MFCC  
 Log Mel with 40/80 frequency bins obviously produce bigger input dimension for each time frame, with the reduction of 40 bin Log Mel to 13 bin MFCC being approximately 67% in estimated parameter count.
-The front end you choose is up to you, but Log Mel and 80 bin for accuracy is a focus, but even 40 bin Log Mel might give a couple of % more accuracy than 13 Bin MFCC.  
+The front end you choose is up to you, but Log Mel and 80 bin for accuracy is a focus, but even 40 bin Log Mel might give a couple of % more accuracy than 13 Bin MFCC.
+likely on compute constrained microcontroller wakeword MFCC is likely a preffered frontend. See https://github.com/espressif/esp-dl/tree/master/esp-dl/audio  
+
 
 📝 License
 This project is based on the original [BCResNet](https://github.com/Qualcomm-AI-research/bcresnet) implementation.   
