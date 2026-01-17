@@ -74,9 +74,11 @@ pip install torch torchvision torchaudio soundfile onnx onnxruntime tqdm numpy
 2. Standard Training (Recommended for Pi Zero 2)
 This configuration uses 80 Mel bins and Sub-Spectral Normalization (SSN). This provides the highest accuracy and robustness against noise.
 ```
-python main2.py --data_root ./dataset --duration 1.5 --n_mels 80
+python main.py --data_root ./dataset --duration 1.5 --n_mels 80
 ```
-`main3.py` creates the streaming version of the model  
+`python3 logmel_stream.py --lr=0.005 --epochs=200 --patience=20 --clip_duration=1.5` creates the log_mel streaming version of the model
+`python3 mfcc_stream.py --lr=0.005 --epochs=200 --patience=20 --clip_duration=1.5` creates the mfcc streaming version of the model
+Both create tiny 10,000 parameter models, MFCC reduces model input size by x2
 
 Understanding the Parameters:
 
@@ -104,9 +106,10 @@ Note: Unlike the original Qualcomm repo, this implementation enables SpecAugment
 This configuration uses 40 Mel bins and disables SSN. Use this if you are targeting very low-power microcontrollers (e.g., ESP32, Cortex-M4) and need to save every bit of RAM/Compute.
 
 ```
-python main2.py --data_root ./dataset --n_mels 40 --no_ssn
+python main.py --data_root ./dataset --n_mels 40 --no_ssn
 ```
-`main3.py` for streaming version  
+Likely though for microcontroller as streaming only uses 30ms chunks and the MFCC is only 20 bins 
+`python3 mfcc_stream.py --lr=0.005 --epochs=200 --patience=20 --clip_duration=1.5` for streaming on microcontroller would provide smallest compute  
 
 ⚙️ Input Parameters
 
