@@ -76,9 +76,11 @@ This configuration uses 80 Mel bins and Sub-Spectral Normalization (SSN). This p
 ```
 python main.py --data_root ./dataset --duration 1.5 --n_mels 80
 ```
-`python3 logmel_stream.py --lr=0.005 --epochs=200 --patience=20 --clip_duration=1.5` creates the log_mel streaming version of the model
-`python3 mfcc_stream.py --lr=0.005 --epochs=200 --patience=20 --clip_duration=1.5` creates the mfcc streaming version of the model
-Both create tiny 10,000 parameter models, MFCC reduces model input size by x2
+`python3 logmel_stream.py --lr=0.005 --epochs=200 --patience=20 --clip_duration=1.5` creates the log_mel streaming version of the model  
+`python3 mfcc_stream.py --lr=0.005 --epochs=200 --patience=20 --clip_duration=1.5` creates the mfcc streaming version of the model  
+Both create tiny 10,000 parameter models, MFCC reduces model input size by x2  
+
+mfcc_stream_test.py / log_mel_stream_test.py to test and basic onnx runtime template  
 
 Understanding the Parameters:
 
