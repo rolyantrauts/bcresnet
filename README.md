@@ -72,7 +72,9 @@ dataset/
 🚀 Quick Start
 1. Install Requirements
 ```
-pip install torch torchvision torchaudio soundfile onnx onnxruntime tqdm numpy
+pip install torch==2.11.0 torchvision==0.26.0 torchaudio==2.11.0 soundfile tqdm numpy
+
+pip install --pre litert-torch-nightly ai-edge-quantizer-nightly
 ```
 2. Standard Training (Recommended for Pi Zero 2)
 This configuration uses 80 Mel bins and Sub-Spectral Normalization (SSN). This provides the highest accuracy and robustness against noise.
