@@ -9,18 +9,38 @@ import warnings
 import soundfile as sf
 
 class CustomAudioDataset(Dataset):
-    def __init__(self, root_dir, subset=None, transform=None, sample_rate=16000):
+    # Added index_str='' to match main.py
+    def __init__(self, root_dir, subset=None, transform=None, sample_rate=16000, index_str=''):
         self.sample_rate = sample_rate
         self.transform = transform
         self.data_path = os.path.join(root_dir, subset) if subset else root_dir
         
-        self.classes = sorted([d for d in os.listdir(self.data_path) 
-                               if os.path.isdir(os.path.join(self.data_path, d))])
+        if not os.path.exists(self.data_path):
+            print(f"❌ Error: Split folder not found: {self.data_path}")
+            self.classes = []
+            self.files = []
+            return
+
+        # --- Dynamic or Indexed Folder Scanning ---
+        if index_str:
+            # Use explicit classes provided via argument
+            self.classes = [c.strip() for c in index_str.split(',')]
+        else:
+            # Fallback: Find all directories in the split folder, ignoring hidden files like .DS_Store
+            self.classes = sorted([d for d in os.listdir(self.data_path) 
+                                   if os.path.isdir(os.path.join(self.data_path, d)) and not d.startswith('.')])
+                                   
         self.class_to_idx = {cls_name: i for i, cls_name in enumerate(self.classes)}
         
         self.files = []
         for cls_name in self.classes:
             cls_folder = os.path.join(self.data_path, cls_name)
+            
+            # Safety check if explicit index folder is missing
+            if not os.path.exists(cls_folder):
+                print(f"   ⚠️ Warning: Folder for class '{cls_name}' not found in {self.data_path}")
+                continue
+                
             wav_files = glob.glob(os.path.join(cls_folder, "*.wav"))
             for wav in wav_files:
                 self.files.append((wav, self.class_to_idx[cls_name]))

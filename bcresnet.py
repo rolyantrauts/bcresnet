@@ -61,7 +61,7 @@ class BCResBlock(nn.Module):
         return self.relu(out)
 
 class BCResNet(nn.Module):
-    def __init__(self, num_classes=3, base_channels=8, multipliers=[1, 1.5, 2, 2.5], use_ssn=True):
+    def __init__(self, num_classes=3, base_channels=8, multipliers=[1, 1.5, 2, 2.5], use_ssn=True, dropout=0.3):
         super().__init__()
         self.conv1 = nn.Conv2d(1, base_channels, 5, stride=(2, 1), padding=(2, 2))
         self.blocks = nn.ModuleList()
@@ -75,6 +75,9 @@ class BCResNet(nn.Module):
             
         self.conv2 = nn.Conv2d(in_planes, int(in_planes*1.5), 5, padding=(2, 2))
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+        
+        # New Dropout implementation
+        self.dropout = nn.Dropout(dropout)
         self.fc = nn.Linear(int(in_planes*1.5), num_classes)
 
     def forward(self, x):
@@ -84,9 +87,10 @@ class BCResNet(nn.Module):
         x = self.conv2(x)
         x = self.avgpool(x)
         x = x.flatten(1)
+        x = self.dropout(x)
         x = self.fc(x)
         return x
 
-def BCResNets(tau=1.0, num_classes=3, use_ssn=True):
+def BCResNets(tau=1.0, num_classes=3, use_ssn=True, dropout=0.3):
     base = int(8 * tau)
-    return BCResNet(num_classes=num_classes, base_channels=base, use_ssn=use_ssn)
+    return BCResNet(num_classes=num_classes, base_channels=base, use_ssn=use_ssn, dropout=dropout)
