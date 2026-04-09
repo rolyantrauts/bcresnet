@@ -38,8 +38,11 @@ Main.py has been retained but there is a dependency hell between
 Opset 17: Supports STFT but crashes on the complex number types in your specific PyTorch version.
 Opset 12: Handles types safely but does not support STFT
 
-So internal log mel support doesn't seem possible and main2.py will have to be used instead and stream_test2.py
-Main2.py just has a external audio front end for the model input
+# Pretrained models
+
+In the models folder  
+`python main_test.py --model bcresnet_int8.tflite --data_root ../gkws/data2`  
+'Hey jarvis' non stream, details in folder.
 
 ---
 
