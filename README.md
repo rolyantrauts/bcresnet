@@ -79,7 +79,7 @@ pip install --pre litert-torch-nightly ai-edge-quantizer-nightly
 2. Standard Training (Recommended for Pi Zero 2)
 This configuration uses 80 Mel bins and Sub-Spectral Normalization (SSN). This provides the highest accuracy and robustness against noise.
 ```
-python main.py --data_root ./dataset --duration 1.5 --n_mels 80
+python main.py --data_root ../gkws/data2 --n_mels 80 --clip_duration=1.4 --lr=0.002 --epochs=100 --patience=7 --batch_size=512 --tau=2 --label_smoothing=0.1
 ```
 `python3 logmel_stream.py --lr=0.005 --epochs=200 --patience=20 --clip_duration=1.5` creates the log_mel streaming version of the model  
 `python3 mfcc_stream.py --lr=0.005 --epochs=200 --patience=20 --clip_duration=1.5` creates the mfcc streaming version of the model  
