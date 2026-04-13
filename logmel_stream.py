@@ -1,292 +1,385 @@
-import torch
-import torch.nn as nn
-import torch.optim as optim
-import torchaudio
-from torch.utils.data import Dataset, DataLoader
-from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
 import os
-import glob
 import argparse
 import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+import torch.multiprocessing
+from torch.utils.data import DataLoader
+from torchvision import transforms
+from torch.optim.lr_scheduler import LinearLR, ReduceLROnPlateau
 from tqdm import tqdm
-import sys
+import json
+import gc
+import traceback
+import warnings
 
-# Import the architecture and export tool
-from bcresnet_logmel_streaming import StreamingBCResNet, export_onnx
+# --- MUTE WARNINGS AND PREVENT MACOS DEADLOCKS ---
+warnings.filterwarnings("ignore", message="An output with one or more elements was resized")
+torch.multiprocessing.set_sharing_strategy('file_system')
 
-# --- Audio Configuration ---
-DEFAULT_SAMPLE_RATE = 16000
-DEFAULT_N_MELS = 40
-DEFAULT_N_FFT = 480      
-DEFAULT_HOP_LENGTH = 480 
+from utils import CustomAudioDataset, Padding, Preprocess
+from bcresnet_logmel_streaming import StreamingBCResNets
 
-class SpeechCommandDataset(Dataset):
-    def __init__(self, root_dir, split, clip_duration=1.5, sample_rate=16000):
-        self.root_dir = os.path.join(root_dir, split)
-        self.classes = ['silence', 'unknown', 'wakeword']
-        self.class_to_idx = {cls: i for i, cls in enumerate(self.classes)}
-        self.files = []
-        self.clip_duration = clip_duration
-        self.sample_rate = sample_rate
-        self.target_samples = int(sample_rate * clip_duration)
-        
-        if not os.path.exists(self.root_dir):
-            if split != 'training': 
-                return 
-            print(f"❌ Error: Split folder not found: {self.root_dir}")
-            sys.exit(1)
+def get_default_device():
+    if torch.cuda.is_available():
+        return "cuda"
+    elif torch.backends.mps.is_available():
+        return "mps"
+    else:
+        return "cpu"
 
-        print(f"--- Loading {split} set ---")
-        for cls in self.classes:
-            cls_path = os.path.join(self.root_dir, cls)
-            if not os.path.exists(cls_path):
-                continue
-            wavs = glob.glob(os.path.join(cls_path, "*.wav"))
-            print(f"   {cls}: {len(wavs)} files")
-            for w in wavs:
-                self.files.append((w, self.class_to_idx[cls]))
-                
-        if split == 'training' and len(self.files) == 0:
-            print(f"❌ Error: No files found in {self.root_dir}")
-            sys.exit(1)
-
-        self.mel_transform = torchaudio.transforms.MelSpectrogram(
-            sample_rate=sample_rate,
-            n_fft=DEFAULT_N_FFT,
-            hop_length=DEFAULT_HOP_LENGTH,
-            n_mels=DEFAULT_N_MELS,
-            center=False, 
-            power=2.0
-        )
-
-    def __len__(self):
-        return len(self.files)
-
-    def __getitem__(self, idx):
-        path, label = self.files[idx]
-        waveform, sr = torchaudio.load(path)
-        
-        if sr != self.sample_rate:
-            resampler = torchaudio.transforms.Resample(sr, self.sample_rate)
-            waveform = resampler(waveform)
-            
-        current_samples = waveform.size(1)
-        if current_samples > self.target_samples:
-            start = torch.randint(0, current_samples - self.target_samples + 1, (1,)).item()
-            waveform = waveform[:, start : start + self.target_samples]
-        elif current_samples < self.target_samples:
-            padding = self.target_samples - current_samples
-            waveform = torch.nn.functional.pad(waveform, (0, padding))
-            
-        mel_spec = self.mel_transform(waveform)
-        log_mel = torch.log(mel_spec + 1e-6)
-        
-        return log_mel, label
-
-def train_one_epoch(model, loader, optimizer, criterion, device, epoch, scheduler):
-    model.train()
-    total_loss = 0
-    correct = 0
-    total = 0
+def export_streaming_models(model, n_mels, save_path):
+    print("\n" + "="*40)
+    print("   EXPORTING STREAMING MODELS (LiteRT)   ")
+    print("="*40)
     
-    pbar = tqdm(loader, desc=f"Epoch {epoch}", unit="batch")
-    
-    for inputs, targets in pbar:
-        inputs, targets = inputs.to(device), targets.to(device)
-        batch_size = inputs.size(0)
-        time_steps = inputs.size(3)
-        
-        optimizer.zero_grad()
-        
-        # --- Streaming Simulation (Frame-by-Frame) ---
-        states = []
-        for (c, h, p) in model.block_specs:
-            s = torch.zeros(batch_size, c, h, p, device=device)
-            states.append(s)
-            
-        logits = None
-        for t in range(time_steps):
-            frame = inputs[:, :, :, t:t+1]
-            logits, *states = model(frame, *states)
-            
-        loss = criterion(logits, targets)
-        
-        if torch.isnan(loss):
-            print("\n⚠️ NaN Loss detected! Skipping update.")
-            optimizer.zero_grad()
-            continue
-            
-        loss.backward()
-        optimizer.step()
-        
-        scheduler.step()
-        
-        total_loss += loss.item()
-        _, predicted = logits.max(1)
-        total += targets.size(0)
-        correct += predicted.eq(targets).sum().item()
-        
-        current_lr = optimizer.param_groups[0]['lr']
-        pbar.set_postfix(loss=f"{total_loss/total:.4f}", acc=f"{100.*correct/total:.2f}%", lr=f"{current_lr:.5f}")
-
-    return total_loss / len(loader), 100. * correct / total
-
-def validate(model, loader, criterion, device):
+    cpu_device = torch.device("cpu")
+    model.to(cpu_device)
     model.eval()
-    total_loss = 0
-    correct = 0
-    total = 0
     
-    with torch.no_grad():
-        for inputs, targets in loader:
-            inputs, targets = inputs.to(device), targets.to(device)
+    print(f"Input Frame Shape: [1, 1, {n_mels}, 1]")
+    print(f"State Buffers: {len(model.block_specs)}")
+    
+    dummy_frame = torch.randn(1, 1, n_mels, 1, requires_grad=False).to(cpu_device)
+    dummy_states = [torch.zeros(1, c, h, p, requires_grad=False).to(cpu_device) for (c, h, p) in model.block_specs]
+    
+    sample_inputs = (dummy_frame, *dummy_states)
+    
+    # ---------------------------------------------------------
+    # EXPORT 1: LiteRT / TFLite (Float32)
+    # ---------------------------------------------------------
+    tflite_f32_path = "bcresnet_stream_float32.tflite"
+    try:
+        import litert_torch
+        print("\nConverting PyTorch streaming model to LiteRT (Float32)...")
+        edge_model_f32 = litert_torch.convert(model, sample_inputs)
+        edge_model_f32.export(tflite_f32_path)
+        print(f"[Success] Saved Float32 LiteRT: {tflite_f32_path}")
+    except ImportError:
+        print("\n[Warning] 'litert_torch' not installed. Skipping Float32 export.")
+    except Exception as e:
+        print(f"\n[Error] LiteRT Float32 Export Failed: {e}")
+        return 
+
+    # ---------------------------------------------------------
+    # EXPORT 2: LiteRT / TFLite (INT8 Quantization)
+    # ---------------------------------------------------------
+    tflite_int8_path = "bcresnet_stream_int8.tflite"
+    try:
+        from ai_edge_quantizer import quantizer as aeq_quantizer
+        from ai_edge_quantizer import recipe
+        
+        print("\nConverting Float32 LiteRT model to INT8 via ai_edge_quantizer...")
+        qt = aeq_quantizer.Quantizer(tflite_f32_path)
+        qt.load_quantization_recipe(recipe.dynamic_wi8_afp32())
+        qt.quantize().export_model(tflite_int8_path)
+        print(f"[Success] Saved INT8 LiteRT: {tflite_int8_path}")
+        
+    except ImportError:
+        print("\n[Warning] 'ai-edge-quantizer' not installed. Run 'pip install ai-edge-quantizer'.")
+    except Exception as e:
+        print("\n" + "!"*40)
+        print("[FATAL ERROR] LiteRT INT8 Export Failed! Full Traceback:")
+        print("!"*40)
+        traceback.print_exc()
+        print("!"*40 + "\n")
+
+    print("="*40 + "\n")
+
+class Trainer:
+    def __init__(self):
+        parser = argparse.ArgumentParser(description="Train Streaming BC-ResNet (Log-Mel)")
+        parser.add_argument("--tau", default=1.0, type=float)
+        parser.add_argument("--device", default="auto", type=str)
+        parser.add_argument("--batch_size", default=64, type=int)
+        parser.add_argument("--data_root", default="./dataset", type=str)
+        parser.add_argument("--clip_duration", default=1.4, type=float)
+        parser.add_argument("--sample_rate", default=16000, type=int)
+        
+        parser.add_argument("--n_mels", default=80, type=int)
+        parser.add_argument("--no_ssn", action="store_true")
+        parser.add_argument("--spec_prob", default=0.8, type=float)
+        
+        parser.add_argument("--epochs", default=100, type=int)
+        parser.add_argument("--warmup_epochs", default=5, type=int)
+        parser.add_argument("--lr", default=0.005, type=float)
+        parser.add_argument("--patience", default=10, type=int)
+        parser.add_argument("--dropout", default=0.3, type=float)
+        parser.add_argument("--label_smoothing", default=0.0, type=float, help="Label smoothing epsilon")
+        
+        parser.add_argument("--resume", action="store_true")
+        parser.add_argument("--start_epoch", default=1, type=int)
+        parser.add_argument("--index", default="", type=str)
+        parser.add_argument("--export", action="store_true")
+
+        args = parser.parse_args()
+        self.__dict__.update(vars(args))
+        
+        self.use_ssn = not self.no_ssn
+        self.target_samples = int(self.clip_duration * self.sample_rate)
+        # Hop length is fixed at 160 in utils.py Preprocess
+        self.time_steps = int(1 + (self.target_samples / 160)) 
+        
+        if self.device == "auto":
+            self.device_name = get_default_device()
+        else:
+            self.device_name = self.device
+            
+        print("\n" + "="*40)
+        print("   TRAINING CONFIGURATION (Streaming)   ")
+        print("="*40)
+        print(f"Device          : {self.device_name}")
+        print(f"Clip Duration   : {self.clip_duration}s ({self.target_samples} samples)")
+        print(f"Mel Bins        : {self.n_mels}")
+        print(f"Spec Shape      : [Batch, 1, {self.n_mels}, {self.time_steps}] (Sliced over time)")
+        print(f"Model Tau       : {self.tau} (SSN={self.use_ssn})")
+        print(f"Dropout         : {self.dropout}")
+        print(f"Label Smoothing : {self.label_smoothing}")
+        print(f"SpecAug Prob    : {self.spec_prob * 100:.1f}%")
+        print(f"Class Index     : {self.index if self.index else 'Auto-detect'}")
+        
+        if self.export:
+            print(f"Mode            : EXPORT ONLY")
+        else:
+            print(f"Start Epoch     : {self.start_epoch} / {self.epochs}")
+            if self.resume:
+                print(f"Resuming        : YES (Attempting to load checkpoint)")
+        print("="*40 + "\n")
+        
+        if self.device_name == "cuda" and torch.cuda.is_available():
+            self.device_name = "cuda:0"
+        try:
+            self.device = torch.device(self.device_name)
+        except RuntimeError:
+            self.device = torch.device("cpu")
+            
+        print(f"Running on device: {self.device}")
+        
+        self._load_data()
+        self._load_model()
+
+    def _load_data(self):
+        print(f"Loading data from {self.data_root}...")
+        transform = transforms.Compose([Padding(target_len=self.target_samples)])
+        
+        self.train_dataset = CustomAudioDataset(self.data_root, subset="training", transform=transform, sample_rate=self.sample_rate, index_str=self.index)
+        self.valid_dataset = CustomAudioDataset(self.data_root, subset="validation", transform=transform, sample_rate=self.sample_rate, index_str=self.index)
+        
+        if os.path.exists(os.path.join(self.data_root, "testing")):
+            self.test_dataset = CustomAudioDataset(self.data_root, subset="testing", transform=transform, sample_rate=self.sample_rate, index_str=self.index)
+        else:
+            self.test_dataset = self.valid_dataset
+
+        self.num_classes = len(self.train_dataset.classes)
+        print(f"Detected Classes: {self.train_dataset.classes} (Total: {self.num_classes})")
+        
+        try:
+            with open("index.txt", "w") as f:
+                for cls in self.train_dataset.classes:
+                    f.write(f"{cls}\n")
+            if not self.export:
+                print(f"📄 Class mapping saved to index.txt")
+        except Exception as e:
+            print(f"⚠️ Warning: Could not save index.txt - {e}")
+
+        # macOS Deadlock Fix
+        if self.export:
+            workers = 0
+            use_persistent = False
+        else:
+            workers = 2 if os.name != 'nt' else 0
+            use_persistent = (workers > 0)
+        
+        self.train_loader = DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True, num_workers=workers, persistent_workers=use_persistent)
+        self.valid_loader = DataLoader(self.valid_dataset, batch_size=self.batch_size, num_workers=workers, persistent_workers=use_persistent)
+        self.test_loader = DataLoader(self.test_dataset, batch_size=self.batch_size, num_workers=workers, persistent_workers=use_persistent)
+
+        self.preprocess_train = Preprocess(self.device, sample_rate=self.sample_rate, n_mels=self.n_mels, specaug=True)
+        self.preprocess_test = Preprocess(self.device, sample_rate=self.sample_rate, n_mels=self.n_mels, specaug=False)
+
+    def _load_model(self):
+        print(f"Building Streaming BCResNet-%.1f..." % self.tau)
+        self.model = StreamingBCResNets(tau=self.tau, num_classes=self.num_classes, use_ssn=self.use_ssn, dropout=self.dropout, n_mels=self.n_mels).to(self.device)
+        
+        self.save_path = "best_streaming_bcresnet.pth"
+        
+        if (self.resume or self.export) and os.path.exists(self.save_path):
+            print(f"🔄 Loading model weights from {self.save_path}...")
+            checkpoint = torch.load(self.save_path, map_location=self.device)
+            if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
+                self.model.load_state_dict(checkpoint["model_state_dict"])
+            else:
+                self.model.load_state_dict(checkpoint)
+        elif self.resume or self.export:
+            print(f"⚠️ Warning: '{self.save_path}' not found. Using randomly initialized weights.")
+            
+        total_params = sum(p.numel() for p in self.model.parameters())
+        print(f"Total Parameters: {total_params:,}")
+
+    def save_labels(self):
+        with open("labels.json", "w") as f:
+            json.dump(self.train_dataset.class_to_idx, f, indent=4)
+
+    def train_epoch(self, optimizer, warmup_scheduler, epoch):
+        self.model.train()
+        total_loss = 0
+        correct = 0
+        total = 0
+        
+        loop = tqdm(self.train_loader, desc=f"Epoch {epoch}/{self.epochs}")
+        
+        for inputs, labels in loop:
+            inputs, labels = inputs.to(self.device), labels.to(self.device)
+            
+            # 1. Full-clip Log-Mel extraction (Shared with main.py)
+            should_augment = (np.random.rand() < self.spec_prob)
+            inputs = self.preprocess_train(inputs, augment=should_augment)
+            
             batch_size = inputs.size(0)
             time_steps = inputs.size(3)
             
-            states = []
-            for (c, h, p) in model.block_specs:
-                states.append(torch.zeros(batch_size, c, h, p, device=device))
+            optimizer.zero_grad()
             
+            # 2. Initialize Streaming Buffers
+            states = [torch.zeros(batch_size, c, h, p, device=self.device) for (c, h, p) in self.model.block_specs]
+            
+            # 3. Stream through Time
             logits = None
             for t in range(time_steps):
                 frame = inputs[:, :, :, t:t+1]
-                logits, *states = model(frame, *states)
+                logits, *states = self.model(frame, *states)
                 
-            loss = criterion(logits, targets)
+            loss = F.cross_entropy(logits, labels, label_smoothing=self.label_smoothing)
+            
+            if torch.isnan(loss):
+                optimizer.zero_grad()
+                continue
+                
+            loss.backward()
+            optimizer.step()
+            
+            if warmup_scheduler is not None:
+                warmup_scheduler.step()
+                
             total_loss += loss.item()
-            _, predicted = logits.max(1)
-            total += targets.size(0)
-            correct += predicted.eq(targets).sum().item()
+            predicted = torch.argmax(logits, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
             
-    return total_loss / len(loader), 100. * correct / total
+            current_lr = optimizer.param_groups[0]['lr']
+            loop.set_postfix(loss=loss.item(), lr=current_lr)
+            
+        return total_loss / len(self.train_loader), 100 * correct / total
 
-def main():
-    parser = argparse.ArgumentParser(description="Train Streaming BC-ResNet-1 (Qualcomm Style)")
-    parser.add_argument('--epochs', type=int, default=50)
-    parser.add_argument('--batch_size', type=int, default=64)
-    # Standard SGD Init LR: 0.1
-    parser.add_argument('--lr', type=float, default=0.1) 
-    parser.add_argument('--dataset', type=str, default='./dataset')
-    parser.add_argument('--clip_duration', type=float, default=1.5)
-    parser.add_argument('--save_path', type=str, default='bcresnet_logmel_stream.pth')
-    
-    parser.add_argument('--warmup_epochs', type=int, default=5, help="Epochs to ramp up LR")
-    parser.add_argument('--patience', type=int, default=15, help="Early stopping patience")
-    
-    parser.add_argument('--export_only', action='store_true', help="Skip training, load checkpoint and export ONNX")
-    
-    args = parser.parse_args()
-
-    # Device Setup
-    if torch.cuda.is_available():
-        device = torch.device("cuda")
-    elif torch.backends.mps.is_available():
-        device = torch.device("mps")
-    else:
-        device = torch.device("cpu")
+    def validate(self):
+        self.model.eval()
+        total_loss = 0
+        correct = 0
+        total = 0
         
-    # Initialize Model & Count Params
-    model = StreamingBCResNet(n_classes=3, tau=1.0).to(device)
-    total_params = sum(p.numel() for p in model.parameters())
-    
-    # Calculate Expected Input Shape for Display
-    time_steps = int(16000 * args.clip_duration / 480) # SR * Duration / Hop
-
-    print("\n" + "="*40)
-    print(f"🚀 Training Configuration")
-    print(f"{'Device':<20} : {device}")
-    print(f"{'Input Tensor':<20} : (Batch, 1, 40, {time_steps})") # Shows correct time frames!
-    print(f"{'Batch Size':<20} : {args.batch_size}")
-    print(f"{'Optimizer':<20} : SGD (Momentum=0.9, WD=1e-3)")
-    print(f"{'Max Epochs':<20} : {args.epochs}")
-    print(f"{'Base LR':<20} : {args.lr}")
-    print(f"{'Warmup / Patience':<20} : {args.warmup_epochs} / {args.patience}")
-    print(f"{'Total Params':<20} : {total_params:,}")
-    print("="*40 + "\n")
-
-    # --- Export Mode ---
-    if args.export_only:
-        if not os.path.exists(args.save_path):
-            print(f"❌ Error: Checkpoint not found at {args.save_path}")
-            return
-        print(f"🔄 Loading weights from {args.save_path}...")
-        model.load_state_dict(torch.load(args.save_path, weights_only=True, map_location=device))
-        export_onnx(model.to('cpu'), path=args.save_path.replace('.pth', '.onnx'))
-        return
-
-    # --- Training Setup ---
-    train_set = SpeechCommandDataset(args.dataset, 'training', clip_duration=args.clip_duration)
-    val_set = SpeechCommandDataset(args.dataset, 'validation', clip_duration=args.clip_duration)
-    
-    train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, num_workers=2)
-    val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=False, num_workers=2)
-
-    # Reverted to Standard CrossEntropy (Qualcomm Default)
-    criterion = nn.CrossEntropyLoss()
-    
-    # Qualcomm Configuration: SGD, Momentum 0.9, Weight Decay 1e-3
-    optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=1e-3)
-
-    # --- Scheduler Setup (Per Iteration) ---
-    steps_per_epoch = len(train_loader)
-    warmup_steps = args.warmup_epochs * steps_per_epoch
-    total_steps = args.epochs * steps_per_epoch
-    decay_steps = total_steps - warmup_steps
-
-    # 1. Warmup: Linear 0 -> lr
-    warmup_scheduler = LinearLR(optimizer, start_factor=0.001, end_factor=1.0, total_iters=warmup_steps)
-    # 2. Decay: Cosine lr -> 0
-    decay_scheduler = CosineAnnealingLR(optimizer, T_max=decay_steps)
-    # 3. Combine
-    scheduler = SequentialLR(optimizer, schedulers=[warmup_scheduler, decay_scheduler], milestones=[warmup_steps])
-
-    # State Tracking
-    best_val_loss = float('inf')
-    best_acc = 0.0
-    patience_counter = 0
-
-    try:
-        for epoch in range(1, args.epochs + 1):
-            train_loss, train_acc = train_one_epoch(model, train_loader, optimizer, criterion, device, epoch, scheduler)
-            val_loss, val_acc = validate(model, val_loader, criterion, device)
-            
-            print(f"Epoch {epoch}: Train Loss {train_loss:.4f} ({train_acc:.2f}%) | Val Loss {val_loss:.4f} ({val_acc:.2f}%)")
-            
-            if epoch == args.warmup_epochs + 1:
-                print("    (Warmup Complete. Resetting Early Stopping Counter)")
-                best_val_loss = val_loss
-                patience_counter = 0
-
-            if epoch > args.warmup_epochs:
-                if val_acc > best_acc:
-                    best_acc = val_acc
-                    torch.save(model.state_dict(), args.save_path)
-                    print(f"--> ⭐ New Best Accuracy! Saved to {args.save_path}")
-
-                if val_loss < best_val_loss:
-                    best_val_loss = val_loss
-                    patience_counter = 0 
-                else:
-                    patience_counter += 1
-                    print(f"    ⏳ No loss improvement. Patience: {patience_counter}/{args.patience}")
-                    
-                if patience_counter >= args.patience:
-                    print(f"\n🛑 Early stopping triggered!")
-                    break
-            else:
-                if val_acc > best_acc: best_acc = val_acc
-                print(f"    (Warmup Phase)")
+        with torch.no_grad():
+            for inputs, labels in self.valid_loader:
+                inputs, labels = inputs.to(self.device), labels.to(self.device)
+                inputs = self.preprocess_test(inputs) 
                 
-    except KeyboardInterrupt:
-        print("\nTraining interrupted.")
+                batch_size = inputs.size(0)
+                time_steps = inputs.size(3)
+                
+                states = [torch.zeros(batch_size, c, h, p, device=self.device) for (c, h, p) in self.model.block_specs]
+                
+                logits = None
+                for t in range(time_steps):
+                    frame = inputs[:, :, :, t:t+1]
+                    logits, *states = self.model(frame, *states)
+                    
+                loss = F.cross_entropy(logits, labels)
+                total_loss += loss.item()
+                
+                predicted = torch.argmax(logits, 1)
+                total += labels.size(0)
+                correct += (predicted == labels).sum().item()
+                
+        return total_loss / len(self.valid_loader), 100 * correct / total
 
-    print(f"\n✅ Training Complete. Best Accuracy: {best_acc:.2f}%")
-    
-    if os.path.exists(args.save_path):
-        print(f"\n🔄 Loading best weights for export...")
-        model_cpu = StreamingBCResNet(n_classes=3, tau=1.0)
-        model_cpu.load_state_dict(torch.load(args.save_path, weights_only=True, map_location='cpu'))
-        export_onnx(model_cpu, path=args.save_path.replace('.pth', '.onnx'))
+    def __call__(self):
+        if self.export:
+            # Force cleanup before XLA runs
+            if hasattr(self, 'train_loader'):
+                del self.train_loader
+                del self.valid_loader
+                del self.test_loader
+                gc.collect()
+            export_streaming_models(self.model, self.n_mels, self.save_path)
+            self.save_labels()
+            return
+            
+        optimizer = torch.optim.SGD(self.model.parameters(), lr=self.lr, weight_decay=1e-3, momentum=0.9)
+        
+        steps_per_epoch = len(self.train_loader)
+        warmup_steps = steps_per_epoch * self.warmup_epochs
+        
+        if self.start_epoch <= self.warmup_epochs:
+            warmup_scheduler = LinearLR(optimizer, start_factor=0.001, end_factor=1.0, total_iters=warmup_steps)
+        else:
+            warmup_scheduler = None
+            
+        plateau_scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=self.patience, min_lr=1e-6)
+        best_loss = float('inf')
+
+        if self.resume and os.path.exists(self.save_path):
+            checkpoint = torch.load(self.save_path, map_location=self.device)
+            if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
+                optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+                plateau_scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+                best_loss = checkpoint.get("best_loss", float('inf'))
+                self.start_epoch = checkpoint.get("epoch", 0) + 1
+            else:
+                print("   -> Loaded old weights only. Optimizer reset.")
+
+        for epoch in range(self.start_epoch, self.epochs + 1):
+            current_warmup = warmup_scheduler if epoch <= self.warmup_epochs else None
+            
+            train_loss, train_acc = self.train_epoch(optimizer, current_warmup, epoch)
+            val_loss, val_acc = self.validate()
+            
+            current_lr = optimizer.param_groups[0]['lr']
+            print(f"Epoch {epoch} | Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.2f}% | LR: {current_lr:.6f}")
+            
+            gc.collect()
+            
+            if epoch == self.warmup_epochs:
+                print("    (Warmup Complete. Transitioning to ReduceLROnPlateau)")
+                
+            if epoch > self.warmup_epochs:
+                plateau_scheduler.step(val_loss)
+
+            if val_loss < best_loss:
+                best_loss = val_loss
+                checkpoint = {
+                    "epoch": epoch,
+                    "model_state_dict": self.model.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict(),
+                    "scheduler_state_dict": plateau_scheduler.state_dict(),
+                    "best_loss": best_loss
+                }
+                torch.save(checkpoint, self.save_path)
+                print(f"--> ⭐ New Best Loss! ({best_loss:.4f}) Saved full state to {self.save_path}")
+        
+        print(f"\nTraining Finished. Best Validation Loss: {best_loss:.4f}")
+        self.save_labels()
+        
+        # Cleanup and Export automatically
+        self.train_loader = DataLoader(self.train_dataset, batch_size=self.batch_size, num_workers=0)
+        self.valid_loader = DataLoader(self.valid_dataset, batch_size=self.batch_size, num_workers=0)
+        gc.collect()
+        
+        if os.path.exists(self.save_path):
+            checkpoint = torch.load(self.save_path, map_location=self.device)
+            self.model.load_state_dict(checkpoint.get("model_state_dict", checkpoint))
+        export_streaming_models(self.model, self.n_mels, self.save_path)
 
 if __name__ == "__main__":
-    main()
+    trainer = Trainer()
+    trainer()

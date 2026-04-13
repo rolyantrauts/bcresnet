@@ -1,181 +1,154 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import argparse
-import os
-import onnx
-import onnxruntime as ort
-import numpy as np
 
-# --- Basic Components ---
+# --- Replicated from bcresnet.py for standalone structural integrity ---
+class SubSpectralNorm(nn.Module):
+    def __init__(self, num_features, spec_groups=16, dim=2):
+        super().__init__()
+        self.spec_groups = spec_groups
+        self.bn = nn.BatchNorm2d(num_features * spec_groups)
+        self.dim = dim
+
+    def forward(self, x):
+        b, c, h, w = x.size()
+        if self.dim == 2: 
+            x = x.view(b, c * self.spec_groups, h // self.spec_groups, w)
+            x = self.bn(x)
+            x = x.view(b, c, h, w)
+        return x
+
+class ConvBNReLU(nn.Module):
+    def __init__(self, in_planes, out_planes, kernel_size, stride=1, groups=1, use_ssn=False):
+        super().__init__()
+        padding = (kernel_size - 1) // 2
+        # Freq-only 1D Convolution
+        self.conv = nn.Conv2d(in_planes, out_planes, (kernel_size, 1), 
+                              stride=(stride, 1), padding=(padding, 0), groups=groups, bias=False)
+        
+        if use_ssn:
+            self.bn = SubSpectralNorm(out_planes, spec_groups=5)
+        else:
+            self.bn = nn.BatchNorm2d(out_planes)
+            
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, x):
+        return self.relu(self.bn(self.conv(x)))
+
+# --- Streaming Architecture ---
 
 class StreamingBCResBlock(nn.Module):
-    def __init__(self, in_plane, out_plane, stage_idx, stride=(1,1)):
+    def __init__(self, in_planes, out_planes, stride=1, use_ssn=False, dropout=0.3):
         super().__init__()
-        self.stride = stride
-        self.dilation = int(2**stage_idx)
-        self.temporal_kernel = 3
-        self.padding_needed = (self.temporal_kernel - 1) * self.dilation
-        
-        # --- Channel/Group Logic ---
-        if in_plane != out_plane:
-            f2_groups = 1
-            f1_groups = 1 
-        else:
-            f2_groups = in_plane # Depthwise
-            f1_groups = out_plane # Depthwise
-            
-        # --- Branch 2 (F2): Frequency + Temporal (Non-dilated) ---
+        # 2D Branch (Frequency Processing - Independent per frame)
         self.f2 = nn.Sequential(
-            nn.Conv2d(in_plane, out_plane, kernel_size=(3, 1), stride=(stride[0], 1), 
-                      padding=(1, 0), groups=f2_groups, bias=False),
-            nn.BatchNorm2d(out_plane)
+            ConvBNReLU(in_planes, out_planes, kernel_size=3, stride=stride, use_ssn=use_ssn),
+            ConvBNReLU(out_planes, out_planes, kernel_size=3, stride=1, use_ssn=use_ssn)
         )
         
-        # --- Branch 1 (F1): Temporal Only (Dilated) ---
-        self.f1_conv1 = nn.Conv2d(out_plane, out_plane, kernel_size=(1, 3), 
-                                  stride=(1, 1), padding=0, 
-                                  dilation=(1, self.dilation), groups=f1_groups, bias=False)
-        self.f1_bn1 = nn.BatchNorm2d(out_plane)
-        self.f1_act = nn.SiLU(True)
-        self.f1_conv2 = nn.Conv2d(out_plane, out_plane, kernel_size=1, bias=False)
-        self.dropout = nn.Dropout2d(0.1)
-
-        # Projection if channels/resolution change
-        self.use_projection = (in_plane != out_plane) or (stride[0] > 1)
-        if self.use_projection:
-            self.proj = nn.Conv2d(in_plane, out_plane, kernel_size=1, stride=(stride[0], 1), bias=False)
-            self.proj_bn = nn.BatchNorm2d(out_plane)
+        # 1D Branch (Temporal Processing)
+        self.temporal_pad = 2
+        
+        # 1. Depthwise Time Scan
+        self.f1_conv1 = nn.Conv2d(out_planes, out_planes, kernel_size=(1, 3), 
+                                 padding=0, groups=out_planes, bias=False)
+        self.f1_bn = nn.BatchNorm2d(out_planes)
+        self.f1_act = nn.SiLU()
+        # 2. Pointwise Channel Mix
+        self.f1_conv2 = nn.Conv2d(out_planes, out_planes, kernel_size=1, bias=False)
+        # 3. Global Temporal Dropout
+        self.dropout = nn.Dropout2d(dropout)
 
     def forward(self, x, state):
-        # 1. Main Shortcut
-        identity = x
-        if self.use_projection:
-            identity = self.proj_bn(self.proj(identity))
-            
-        # 2. F2 Branch
+        # 1. Process F2 (Frequency)
         out_f2 = self.f2(x)
         
-        # 3. Global Avg Pool for F1 branch input
+        # 2. Pool Frequency Dimension down to 1
         out_pooled = torch.mean(out_f2, dim=2, keepdim=True) 
         
-        # 4. Temporal State Update
+        # 3. Concatenate Temporal State
         combined = torch.cat((state, out_pooled), dim=3)
-        new_state = combined[:, :, :, 1:]
+        new_state = combined[:, :, :, 1:] # Shift buffer
         
-        # 5. F1 Branch
-        out_f1 = self.f1_conv1(combined)
-        out_f1 = self.f1_bn1(out_f1)
-        out_f1 = self.f1_act(out_f1)
-        out_f1 = self.f1_conv2(out_f1)
-        out_f1 = self.dropout(out_f1)
+        # 4. Process F1 (Time) on the 3 buffered frames
+        res = self.f1_conv1(combined)
+        res = self.f1_bn(res)
+        res = self.f1_act(res)
+        res = self.f1_conv2(res)
+        res = self.dropout(res)
         
-        # 6. Add & Activation
-        out = out_f1 + out_f2 + identity
-        return F.relu(out, True), new_state
-
-# --- Full Network (BC-ResNet-1 tau=1) ---
+        # 5. Residual Add
+        out = out_f2 + res 
+        return F.relu(out, inplace=True), new_state
 
 class StreamingBCResNet(nn.Module):
-    def __init__(self, n_classes=12, tau=1.0):
+    def __init__(self, num_classes=3, base_channels=8, multipliers=[1, 1.5, 2, 2.5], use_ssn=True, dropout=0.3, n_mels=80):
         super().__init__()
+        self.block_specs = []
         
-        base_c = int(8 * tau) 
-        self.stage_channels = [base_c * 2, base_c, int(base_c * 1.5), base_c * 2, int(base_c * 2.5), base_c * 4]
-        self.num_blocks = [2, 2, 4, 4] 
-        
-        self.stem = nn.Sequential(
-            nn.Conv2d(1, self.stage_channels[0], kernel_size=(5, 1), stride=(2, 1), padding=(2, 0), bias=False),
-            nn.BatchNorm2d(self.stage_channels[0]),
-            nn.ReLU(True)
-        )
+        # --- STEM (conv1) ---
+        self.block_specs.append((1, n_mels, 4))
+        self.conv1 = nn.Conv2d(1, base_channels, kernel_size=(5, 5), stride=(2, 1), padding=(2, 0))
         
         self.blocks = nn.ModuleList()
-        self.block_specs = [] 
         
-        # Stage Construction
-        self._make_stage(0, self.num_blocks[0], self.stage_channels[0], self.stage_channels[1])
-        self._make_stage(1, self.num_blocks[1], self.stage_channels[1], self.stage_channels[2], stride=(2, 1))
-        self._make_stage(2, self.num_blocks[2], self.stage_channels[2], self.stage_channels[3], stride=(2, 1))
-        self._make_stage(3, self.num_blocks[3], self.stage_channels[3], self.stage_channels[4])
-
-        # Classifier
-        last_c = self.stage_channels[4]
-        final_c = self.stage_channels[5]
-        self.classifier = nn.Sequential(
-            # Reduces Freq=5 down to 1
-            nn.Conv2d(last_c, last_c, kernel_size=(5, 1), padding=(0, 0), groups=last_c, bias=False),
-            nn.Conv2d(last_c, final_c, kernel_size=1, bias=False),
-            nn.BatchNorm2d(final_c),
-            nn.ReLU(True),
-            nn.Dropout(0.5),
-            nn.Conv2d(final_c, n_classes, kernel_size=1)
-        )
-
-    def _make_stage(self, stage_idx, num_blocks, in_c, out_c, stride=(1, 1)):
-        for i in range(num_blocks):
-            s = stride if i == 0 else (1, 1)
-            inp = in_c if i == 0 else out_c
-            block = StreamingBCResBlock(inp, out_c, stage_idx, stride=s)
-            self.blocks.append(block)
-            self.block_specs.append((out_c, 1, block.padding_needed))
+        in_planes = base_channels
+        for i, m in enumerate(multipliers):
+            out_planes = int(base_channels * m)
+            # Block 1 (Strided)
+            stride = 1 if i == 0 else 2
+            b1 = StreamingBCResBlock(in_planes, out_planes, stride=stride, use_ssn=use_ssn, dropout=dropout)
+            self.blocks.append(b1)
+            self.block_specs.append((out_planes, 1, b1.temporal_pad))
+            
+            # Block 2 (Unstrided)
+            in_planes = out_planes
+            b2 = StreamingBCResBlock(in_planes, out_planes, stride=1, use_ssn=use_ssn, dropout=dropout)
+            self.blocks.append(b2)
+            self.block_specs.append((out_planes, 1, b2.temporal_pad))
+            
+        # --- CLASSIFIER (conv2) ---
+        freq_dim = n_mels // 16 
+        self.block_specs.append((in_planes, freq_dim, 4))
+        self.conv2 = nn.Conv2d(in_planes, int(in_planes*1.5), kernel_size=(5, 5), padding=(2, 0))
+        
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+        self.embedding_dim = int(in_planes*1.5)
+        
+        # Classifier Dropout
+        self.dropout = nn.Dropout(dropout)
+        self.fc = nn.Linear(self.embedding_dim, num_classes)
 
     def forward(self, x, *states):
         new_states = []
-        x = self.stem(x)
         
-        for i, block in enumerate(self.blocks):
-            s_in = states[i]
-            x, s_out = block(x, s_in)
+        # 1. Stem
+        s_conv1 = states[0]
+        comb_conv1 = torch.cat((s_conv1, x), dim=3)
+        new_states.append(comb_conv1[:, :, :, 1:])
+        x = self.conv1(comb_conv1)
+        
+        # 2. Residual Blocks
+        state_idx = 1
+        for block in self.blocks:
+            x, s_out = block(x, states[state_idx])
             new_states.append(s_out)
+            state_idx += 1
+            
+        # 3. Classifier Feature Extraction
+        s_conv2 = states[state_idx]
+        comb_conv2 = torch.cat((s_conv2, x), dim=3)
+        new_states.append(comb_conv2[:, :, :, 1:])
         
-        # No Global Pooling. Classifier handles 5x1 input.
-        x = self.classifier(x)
-        logits = x.view(x.size(0), -1)
+        x = self.conv2(comb_conv2)
+        x = self.avgpool(x)
+        x = x.flatten(1)
+        x = self.dropout(x)
+        logits = self.fc(x)
         
         return (logits, *new_states)
 
-# --- Export & Verify Helper Function ---
-
-def export_onnx(model, path="bcresnet_streaming_tau1.onnx"):
-    model.eval()
-    
-    dummy_input = torch.randn(1, 1, 40, 1)
-    
-    dummy_states = []
-    input_names = ['input']
-    output_names = ['logits']
-    
-    # Legacy dynamic axes (works best with dynamo=False)
-    dynamic_axes = {'input': {0: 'batch'}}
-    
-    for i, (c, h, p) in enumerate(model.block_specs):
-        s = torch.zeros(1, c, h, p) 
-        dummy_states.append(s)
-        
-        s_name = f'state_in_{i}'
-        input_names.append(s_name)
-        output_names.append(f'state_out_{i}')
-        
-        dynamic_axes[s_name] = {0: 'batch'}
-
-    model_inputs = (dummy_input, *dummy_states)
-    
-    print(f"Exporting model with {len(dummy_states)} state buffers...")
-    print(f"Total parameters: {sum(p.numel() for p in model.parameters())}")
-    print("Using Stable (Legacy) Exporter for stability...")
-
-    torch.onnx.export(
-        model, 
-        model_inputs,
-        path,
-        input_names=input_names,
-        output_names=output_names,
-        dynamic_axes=dynamic_axes,
-        opset_version=17,
-        dynamo=False,
-        verbose=True 
-    )
-    print(f"✅ Exported to {path}")
-
-
+def StreamingBCResNets(tau=1.0, num_classes=3, use_ssn=True, dropout=0.3, n_mels=80):
+    base = int(8 * tau)
+    return StreamingBCResNet(num_classes=num_classes, base_channels=base, use_ssn=use_ssn, dropout=dropout, n_mels=n_mels)
