@@ -52,6 +52,7 @@ class Trainer:
         parser.add_argument("--patience", default=10, type=int, help="Epochs of plateau before reducing learning rate")
         
         parser.add_argument("--dropout", default=0.3, type=float, help="Dropout rate for the model classifier (default: 0.3)")
+        parser.add_argument("--label_smoothing", default=0.0, type=float, help="Label smoothing epsilon for CrossEntropyLoss (default: 0.0)")
         
         parser.add_argument("--resume", action="store_true", help="Resume weights and state from checkpoint")
         parser.add_argument("--start_epoch", default=1, type=int, help="Epoch to start/resume training from")
@@ -77,22 +78,23 @@ class Trainer:
         print("\n" + "="*40)
         print("   TRAINING CONFIGURATION (External)   ")
         print("="*40)
-        print(f"Device       : {self.device}")
-        print(f"Clip Duration: {self.clip_duration}s ({self.target_samples} samples)")
-        print(f"Mel Bins     : {self.n_mels}")
-        print(f"Spec Shape   : [1, 1, {self.n_mels}, {self.spec_width}] (Input for C++)")
-        print(f"Model Tau    : {self.tau} (SSN={self.use_ssn})")
-        print(f"Dropout      : {self.dropout}")
-        print(f"ArcFace      : {'ON (Outputting Embeddings)' if self.arcface else 'OFF (Linear Classifier)'}")
-        print(f"SpecAug Prob : {self.spec_prob * 100:.1f}%")
-        print(f"Class Index  : {self.index if self.index else 'Auto-detect'}")
+        print(f"Device          : {self.device}")
+        print(f"Clip Duration   : {self.clip_duration}s ({self.target_samples} samples)")
+        print(f"Mel Bins        : {self.n_mels}")
+        print(f"Spec Shape      : [1, 1, {self.n_mels}, {self.spec_width}] (Input for C++)")
+        print(f"Model Tau       : {self.tau} (SSN={self.use_ssn})")
+        print(f"Dropout         : {self.dropout}")
+        print(f"Label Smoothing : {self.label_smoothing}")
+        print(f"ArcFace         : {'ON (Outputting Embeddings)' if self.arcface else 'OFF (Linear Classifier)'}")
+        print(f"SpecAug Prob    : {self.spec_prob * 100:.1f}%")
+        print(f"Class Index     : {self.index if self.index else 'Auto-detect'}")
         
         if self.export:
-            print(f"Mode         : EXPORT ONLY")
+            print(f"Mode            : EXPORT ONLY")
         else:
-            print(f"Start Epoch  : {self.start_epoch} / {self.epochs}")
+            print(f"Start Epoch     : {self.start_epoch} / {self.epochs}")
             if self.resume:
-                print(f"Resuming     : YES (Attempting to load checkpoint)")
+                print(f"Resuming        : YES (Attempting to load checkpoint)")
         print("="*40 + "\n")
         
         if self.device == "auto":
@@ -198,9 +200,10 @@ class Trainer:
                 outputs = self.model(inputs)
                 
                 if self.arcface:
-                    # Pass label=None to get raw similarity logits during validation
                     outputs = self.arcface_layer(outputs, label=None)
                 
+                # Label Smoothing is purely a training regularizer. 
+                # We use strict cross_entropy for accurate validation loss metrics.
                 loss = F.cross_entropy(outputs, labels)
                 total_loss += loss.item()
                 
@@ -261,7 +264,7 @@ class Trainer:
             print(f"[Success] Saved INT8 LiteRT: {tflite_int8_path}")
             
         except ImportError:
-            print("\n[Warning] 'ai-edge-quantizer' not installed. Run 'pip install ai-edge-quantizer' to enable INT8 exports.")
+            print("\n[Warning] 'ai-edge-quantizer' not installed. Run 'pip install ai-edge-quantizer'.")
         except Exception as e:
             print("\n" + "!"*40)
             print("[FATAL ERROR] LiteRT INT8 Export Failed! Full Traceback:")
@@ -274,10 +277,8 @@ class Trainer:
         # ---------------------------------------------------------
         if self.arcface:
             print("\nExtracting Golden Fingerprints for C++ Inference...")
-            # Normalize the weights so C++ can just do a direct dot product
             golden_weights = F.normalize(self.arcface_layer.weight.data, dim=1).cpu().numpy()
             
-            # Save as JSON for easy C++ parsing
             with open("arcface_golden_weights.json", "w") as f:
                 json.dump(golden_weights.tolist(), f)
             print(f"[Success] Saved Golden Fingerprints to arcface_golden_weights.json (Shape: {golden_weights.shape})")
@@ -285,19 +286,18 @@ class Trainer:
         print("="*40 + "\n")
 
     def __call__(self):
-        # --- EXPORT MODE ONLY ---
         if self.export:
             self.export_models()
             self.save_labels()
             return
             
-        # --- STANDARD TRAINING LOOP ---
         if self.arcface:
             params = list(self.model.parameters()) + list(self.arcface_layer.parameters())
         else:
             params = self.model.parameters()
             
-        optimizer = torch.optim.SGD(params, lr=self.lr, weight_decay=1e-4, momentum=0.9)
+        # Updated weight_decay to 1e-3 to perfectly match Qualcomm official specification
+        optimizer = torch.optim.SGD(params, lr=self.lr, weight_decay=1e-3, momentum=0.9)
         
         steps_per_epoch = len(self.train_loader)
         warmup_steps = steps_per_epoch * self.warmup_epochs
@@ -350,10 +350,10 @@ class Trainer:
                 outputs = self.model(inputs)
                 
                 if self.arcface:
-                    # Pass labels to apply the margin penalty during training!
                     outputs = self.arcface_layer(outputs, labels)
                     
-                loss = F.cross_entropy(outputs, labels)
+                # Apply Label Smoothing during training updates
+                loss = F.cross_entropy(outputs, labels, label_smoothing=self.label_smoothing)
                 loss.backward()
                 optimizer.step()
                 
