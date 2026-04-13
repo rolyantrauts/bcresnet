@@ -61,8 +61,9 @@ class BCResBlock(nn.Module):
         return self.relu(out)
 
 class BCResNet(nn.Module):
-    def __init__(self, num_classes=3, base_channels=8, multipliers=[1, 1.5, 2, 2.5], use_ssn=True, dropout=0.3):
+    def __init__(self, num_classes=3, base_channels=8, multipliers=[1, 1.5, 2, 2.5], use_ssn=True, dropout=0.3, use_arcface=False):
         super().__init__()
+        self.use_arcface = use_arcface
         self.conv1 = nn.Conv2d(1, base_channels, 5, stride=(2, 1), padding=(2, 2))
         self.blocks = nn.ModuleList()
         
@@ -76,9 +77,11 @@ class BCResNet(nn.Module):
         self.conv2 = nn.Conv2d(in_planes, int(in_planes*1.5), 5, padding=(2, 2))
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
         
-        # New Dropout implementation
+        self.embedding_dim = int(in_planes*1.5)
         self.dropout = nn.Dropout(dropout)
-        self.fc = nn.Linear(int(in_planes*1.5), num_classes)
+        
+        if not self.use_arcface:
+            self.fc = nn.Linear(self.embedding_dim, num_classes)
 
     def forward(self, x):
         x = self.conv1(x)
@@ -88,9 +91,13 @@ class BCResNet(nn.Module):
         x = self.avgpool(x)
         x = x.flatten(1)
         x = self.dropout(x)
+        
+        if self.use_arcface:
+            return x # Return Raw Embeddings
+            
         x = self.fc(x)
         return x
 
-def BCResNets(tau=1.0, num_classes=3, use_ssn=True, dropout=0.3):
+def BCResNets(tau=1.0, num_classes=3, use_ssn=True, dropout=0.3, use_arcface=False):
     base = int(8 * tau)
-    return BCResNet(num_classes=num_classes, base_channels=base, use_ssn=use_ssn, dropout=dropout)
+    return BCResNet(num_classes=num_classes, base_channels=base, use_ssn=use_ssn, dropout=dropout, use_arcface=use_arcface)

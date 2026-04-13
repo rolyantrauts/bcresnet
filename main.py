@@ -21,7 +21,7 @@ warnings.filterwarnings("ignore", message="An output with one or more elements w
 torch.multiprocessing.set_sharing_strategy('file_system')
 
 from bcresnet import BCResNets
-from utils import CustomAudioDataset, Padding, Preprocess
+from utils import CustomAudioDataset, Padding, Preprocess, ArcMarginProduct
 
 def get_default_device():
     if torch.cuda.is_available():
@@ -58,6 +58,9 @@ class Trainer:
         
         parser.add_argument("--index", default="", type=str, help='Comma-separated classes (e.g. "hey_jarvis,unknown,noise")')
         parser.add_argument("--export", action="store_true", help="Skip training, load best.pth, and export models")
+        
+        # --- ARCFACE TOGGLE ---
+        parser.add_argument("--arcface", action="store_true", help="Use Cosine Similarity & Angular Margin (Outputs embeddings)")
 
         args = parser.parse_args()
         self.__dict__.update(vars(args))
@@ -80,6 +83,7 @@ class Trainer:
         print(f"Spec Shape   : [1, 1, {self.n_mels}, {self.spec_width}] (Input for C++)")
         print(f"Model Tau    : {self.tau} (SSN={self.use_ssn})")
         print(f"Dropout      : {self.dropout}")
+        print(f"ArcFace      : {'ON (Outputting Embeddings)' if self.arcface else 'OFF (Linear Classifier)'}")
         print(f"SpecAug Prob : {self.spec_prob * 100:.1f}%")
         print(f"Class Index  : {self.index if self.index else 'Auto-detect'}")
         
@@ -148,13 +152,20 @@ class Trainer:
 
     def _load_model(self):
         print(f"Building BCResNet-%.1f..." % self.tau)
-        self.model = BCResNets(tau=self.tau, num_classes=self.num_classes, use_ssn=self.use_ssn, dropout=self.dropout).to(self.device)
+        self.model = BCResNets(tau=self.tau, num_classes=self.num_classes, use_ssn=self.use_ssn, dropout=self.dropout, use_arcface=self.arcface).to(self.device)
+        
+        if self.arcface:
+            self.arcface_layer = ArcMarginProduct(in_features=self.model.embedding_dim, out_features=self.num_classes).to(self.device)
+        else:
+            self.arcface_layer = None
         
         if (self.resume or self.export) and os.path.exists("best_bcresnet.pth"):
             print("🔄 Loading model weights from best_bcresnet.pth...")
             checkpoint = torch.load("best_bcresnet.pth", map_location=self.device)
             if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
                 self.model.load_state_dict(checkpoint["model_state_dict"])
+                if self.arcface and "arcface_state_dict" in checkpoint:
+                    self.arcface_layer.load_state_dict(checkpoint["arcface_state_dict"])
             else:
                 self.model.load_state_dict(checkpoint)
         elif self.resume or self.export:
@@ -173,6 +184,9 @@ class Trainer:
 
     def Test(self, loader):
         self.model.eval()
+        if self.arcface:
+            self.arcface_layer.eval()
+            
         correct = 0
         total = 0
         total_loss = 0
@@ -180,7 +194,12 @@ class Trainer:
             for inputs, labels in loader:
                 inputs, labels = inputs.to(self.device), labels.to(self.device)
                 inputs = self.preprocess_test(inputs) 
+                
                 outputs = self.model(inputs)
+                
+                if self.arcface:
+                    # Pass label=None to get raw similarity logits during validation
+                    outputs = self.arcface_layer(outputs, label=None)
                 
                 loss = F.cross_entropy(outputs, labels)
                 total_loss += loss.item()
@@ -193,7 +212,6 @@ class Trainer:
 
     def export_models(self):
         # Destroy all multiprocessing iterators and force Garbage Collection
-        # This releases the macOS background thread locks before XLA boots up.
         if hasattr(self, 'train_loader'):
             del self.train_loader
             del self.valid_loader
@@ -237,14 +255,8 @@ class Trainer:
             from ai_edge_quantizer import recipe
             
             print("\nConverting Float32 LiteRT model to INT8 via ai_edge_quantizer...")
-            
-            # Load the newly exported Float32 flatbuffer into the quantizer
             qt = aeq_quantizer.Quantizer(tflite_f32_path)
-            
-            # Load the new official INT8 recipe for standard edge deployment
             qt.load_quantization_recipe(recipe.dynamic_wi8_afp32())
-            
-            # Quantize and save the flatbuffer
             qt.quantize().export_model(tflite_int8_path)
             print(f"[Success] Saved INT8 LiteRT: {tflite_int8_path}")
             
@@ -257,6 +269,19 @@ class Trainer:
             traceback.print_exc()
             print("!"*40 + "\n")
 
+        # ---------------------------------------------------------
+        # EXPORT 3: Golden Weights (If ArcFace is enabled)
+        # ---------------------------------------------------------
+        if self.arcface:
+            print("\nExtracting Golden Fingerprints for C++ Inference...")
+            # Normalize the weights so C++ can just do a direct dot product
+            golden_weights = F.normalize(self.arcface_layer.weight.data, dim=1).cpu().numpy()
+            
+            # Save as JSON for easy C++ parsing
+            with open("arcface_golden_weights.json", "w") as f:
+                json.dump(golden_weights.tolist(), f)
+            print(f"[Success] Saved Golden Fingerprints to arcface_golden_weights.json (Shape: {golden_weights.shape})")
+
         print("="*40 + "\n")
 
     def __call__(self):
@@ -267,7 +292,12 @@ class Trainer:
             return
             
         # --- STANDARD TRAINING LOOP ---
-        optimizer = torch.optim.SGD(self.model.parameters(), lr=self.lr, weight_decay=1e-4, momentum=0.9)
+        if self.arcface:
+            params = list(self.model.parameters()) + list(self.arcface_layer.parameters())
+        else:
+            params = self.model.parameters()
+            
+        optimizer = torch.optim.SGD(params, lr=self.lr, weight_decay=1e-4, momentum=0.9)
         
         steps_per_epoch = len(self.train_loader)
         warmup_steps = steps_per_epoch * self.warmup_epochs
@@ -305,6 +335,9 @@ class Trainer:
 
         for epoch in range(self.start_epoch, self.epochs + 1):
             self.model.train()
+            if self.arcface:
+                self.arcface_layer.train()
+                
             loop = tqdm(self.train_loader, desc=f"Epoch {epoch}/{self.epochs}")
             
             for inputs, labels in loop:
@@ -315,6 +348,11 @@ class Trainer:
                 
                 optimizer.zero_grad()
                 outputs = self.model(inputs)
+                
+                if self.arcface:
+                    # Pass labels to apply the margin penalty during training!
+                    outputs = self.arcface_layer(outputs, labels)
+                    
                 loss = F.cross_entropy(outputs, labels)
                 loss.backward()
                 optimizer.step()
@@ -345,6 +383,9 @@ class Trainer:
                     "scheduler_state_dict": plateau_scheduler.state_dict(),
                     "best_loss": best_loss
                 }
+                if self.arcface:
+                    checkpoint["arcface_state_dict"] = self.arcface_layer.state_dict()
+                    
                 torch.save(checkpoint, "best_bcresnet.pth")
                 print(f"--> ⭐ New Best Loss! ({best_loss:.4f}) Saved full state to best_bcresnet.pth")
         
@@ -352,8 +393,6 @@ class Trainer:
         self.save_labels()
         
         # --- DEADLOCK FIX FOR FULL TRAINING ---
-        # Before we pass control over to LiteRT/XLA for the final export, 
-        # we manually shut down PyTorch background threads.
         self.train_loader = DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True, num_workers=0)
         self.valid_loader = DataLoader(self.valid_dataset, batch_size=self.batch_size, shuffle=False, num_workers=0)
         self.test_loader = DataLoader(self.test_dataset, batch_size=self.batch_size, shuffle=False, num_workers=0)
@@ -363,6 +402,8 @@ class Trainer:
             checkpoint = torch.load("best_bcresnet.pth", map_location=self.device)
             if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
                 self.model.load_state_dict(checkpoint["model_state_dict"])
+                if self.arcface and "arcface_state_dict" in checkpoint:
+                    self.arcface_layer.load_state_dict(checkpoint["arcface_state_dict"])
             else:
                 self.model.load_state_dict(checkpoint)
                 

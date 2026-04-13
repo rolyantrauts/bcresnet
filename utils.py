@@ -1,15 +1,16 @@
 import os
 import glob
+import math
 import torch
 import torch.nn as nn
 import torchaudio
+import torch.nn.functional as F
 from torch.utils.data import Dataset
 import numpy as np
 import warnings
 import soundfile as sf
 
 class CustomAudioDataset(Dataset):
-    # Added index_str='' to match main.py
     def __init__(self, root_dir, subset=None, transform=None, sample_rate=16000, index_str=''):
         self.sample_rate = sample_rate
         self.transform = transform
@@ -23,10 +24,8 @@ class CustomAudioDataset(Dataset):
 
         # --- Dynamic or Indexed Folder Scanning ---
         if index_str:
-            # Use explicit classes provided via argument
             self.classes = [c.strip() for c in index_str.split(',')]
         else:
-            # Fallback: Find all directories in the split folder, ignoring hidden files like .DS_Store
             self.classes = sorted([d for d in os.listdir(self.data_path) 
                                    if os.path.isdir(os.path.join(self.data_path, d)) and not d.startswith('.')])
                                    
@@ -36,7 +35,6 @@ class CustomAudioDataset(Dataset):
         for cls_name in self.classes:
             cls_folder = os.path.join(self.data_path, cls_name)
             
-            # Safety check if explicit index folder is missing
             if not os.path.exists(cls_folder):
                 print(f"   ⚠️ Warning: Folder for class '{cls_name}' not found in {self.data_path}")
                 continue
@@ -116,3 +114,44 @@ class Preprocess(nn.Module):
             x = self.time_masking(x)
             
         return x
+
+class ArcMarginProduct(nn.Module):
+    """Applies Cosine Similarity and Angular Margin Penalty for ArcFace Training."""
+    def __init__(self, in_features, out_features, s=30.0, m=0.50):
+        super(ArcMarginProduct, self).__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.s = s  # Scale factor
+        self.m = m  # Margin penalty in radians
+        
+        # The Golden Fingerprints for each class
+        self.weight = nn.Parameter(torch.FloatTensor(out_features, in_features))
+        nn.init.xavier_uniform_(self.weight)
+
+        self.cos_m = math.cos(m)
+        self.sin_m = math.sin(m)
+        self.th = math.cos(math.pi - m)
+        self.mm = math.sin(math.pi - m) * m
+
+    def forward(self, input, label=None):
+        # 1. Calculate Cosine Similarity (Dot product of normalized vectors)
+        cosine = F.linear(F.normalize(input), F.normalize(self.weight))
+        
+        # If no label is provided (during testing), just return scaled similarity
+        if label is None:
+            return cosine * self.s
+
+        # 2. Add the margin penalty
+        sine = torch.sqrt((1.0 - torch.pow(cosine, 2)).clamp(0, 1))
+        phi = cosine * self.cos_m - sine * self.sin_m
+        phi = torch.where(cosine > self.th, phi, cosine - self.mm)
+        
+        # 3. Apply the margin ONLY to the true class
+        one_hot = torch.zeros(cosine.size(), device=input.device)
+        one_hot.scatter_(1, label.view(-1, 1).long(), 1)
+        
+        output = (one_hot * phi) + ((1.0 - one_hot) * cosine)
+        
+        # 4. Scale up the numbers so CrossEntropyLoss works properly
+        output *= self.s
+        return output
