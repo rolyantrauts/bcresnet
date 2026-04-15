@@ -202,8 +202,6 @@ class Trainer:
                 if self.arcface:
                     outputs = self.arcface_layer(outputs, label=None)
                 
-                # Label Smoothing is purely a training regularizer. 
-                # We use strict cross_entropy for accurate validation loss metrics.
                 loss = F.cross_entropy(outputs, labels)
                 total_loss += loss.item()
                 

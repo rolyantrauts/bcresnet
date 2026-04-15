@@ -315,6 +315,7 @@ class Trainer:
             self.save_labels()
             return
             
+        # Updated weight_decay to 1e-3 to perfectly match Qualcomm official specification
         optimizer = torch.optim.SGD(self.model.parameters(), lr=self.lr, weight_decay=1e-3, momentum=0.9)
         
         steps_per_epoch = len(self.train_loader)

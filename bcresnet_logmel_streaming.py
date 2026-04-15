@@ -39,7 +39,7 @@ class ConvBNReLU(nn.Module):
 # --- Streaming Architecture ---
 
 class StreamingBCResBlock(nn.Module):
-    def __init__(self, in_planes, out_planes, stride=1, use_ssn=False, dropout=0.3):
+    def __init__(self, in_planes, out_planes, stride=1, use_ssn=False):
         super().__init__()
         # 2D Branch (Frequency Processing - Independent per frame)
         self.f2 = nn.Sequential(
@@ -47,18 +47,13 @@ class StreamingBCResBlock(nn.Module):
             ConvBNReLU(out_planes, out_planes, kernel_size=3, stride=1, use_ssn=use_ssn)
         )
         
-        # 1D Branch (Temporal Processing)
         self.temporal_pad = 2
         
-        # 1. Depthwise Time Scan
+        # 1D Branch (Temporal Processing)
         self.f1_conv1 = nn.Conv2d(out_planes, out_planes, kernel_size=(1, 3), 
                                  padding=0, groups=out_planes, bias=False)
         self.f1_bn = nn.BatchNorm2d(out_planes)
         self.f1_act = nn.SiLU()
-        # 2. Pointwise Channel Mix
-        self.f1_conv2 = nn.Conv2d(out_planes, out_planes, kernel_size=1, bias=False)
-        # 3. Global Temporal Dropout
-        self.dropout = nn.Dropout2d(dropout)
 
     def forward(self, x, state):
         # 1. Process F2 (Frequency)
@@ -75,8 +70,6 @@ class StreamingBCResBlock(nn.Module):
         res = self.f1_conv1(combined)
         res = self.f1_bn(res)
         res = self.f1_act(res)
-        res = self.f1_conv2(res)
-        res = self.dropout(res)
         
         # 5. Residual Add
         out = out_f2 + res 
@@ -98,13 +91,13 @@ class StreamingBCResNet(nn.Module):
             out_planes = int(base_channels * m)
             # Block 1 (Strided)
             stride = 1 if i == 0 else 2
-            b1 = StreamingBCResBlock(in_planes, out_planes, stride=stride, use_ssn=use_ssn, dropout=dropout)
+            b1 = StreamingBCResBlock(in_planes, out_planes, stride=stride, use_ssn=use_ssn)
             self.blocks.append(b1)
             self.block_specs.append((out_planes, 1, b1.temporal_pad))
             
             # Block 2 (Unstrided)
             in_planes = out_planes
-            b2 = StreamingBCResBlock(in_planes, out_planes, stride=1, use_ssn=use_ssn, dropout=dropout)
+            b2 = StreamingBCResBlock(in_planes, out_planes, stride=1, use_ssn=use_ssn)
             self.blocks.append(b2)
             self.block_specs.append((out_planes, 1, b2.temporal_pad))
             
@@ -116,7 +109,7 @@ class StreamingBCResNet(nn.Module):
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
         self.embedding_dim = int(in_planes*1.5)
         
-        # Classifier Dropout
+        # Global Classifier Dropout
         self.dropout = nn.Dropout(dropout)
         self.fc = nn.Linear(self.embedding_dim, num_classes)
 

@@ -37,7 +37,7 @@ class ConvBNReLU(nn.Module):
         return self.relu(self.bn(self.conv(x)))
 
 class BCResBlock(nn.Module):
-    def __init__(self, in_planes, out_planes, stride=1, use_ssn=False, dropout=0.3):
+    def __init__(self, in_planes, out_planes, stride=1, use_ssn=False):
         super().__init__()
         # 2D Branch (Frequency Processing)
         self.f2 = nn.Sequential(
@@ -47,14 +47,9 @@ class BCResBlock(nn.Module):
         # 1D Branch (Temporal Processing)
         self.f1 = nn.Sequential(
             nn.AdaptiveAvgPool2d((1, None)),
-            # 1. Depthwise Time Scan
             nn.Conv2d(out_planes, out_planes, kernel_size=(1, 3), padding=(0, 1), groups=out_planes, bias=False),
             nn.BatchNorm2d(out_planes),
-            nn.SiLU(),
-            # 2. Pointwise Channel Mix (Qualcomm Spec)
-            nn.Conv2d(out_planes, out_planes, kernel_size=1, bias=False),
-            # 3. Global Temporal Dropout
-            nn.Dropout2d(dropout)
+            nn.SiLU() 
         )
         self.relu = nn.ReLU(inplace=True)
 
@@ -74,16 +69,16 @@ class BCResNet(nn.Module):
         in_planes = base_channels
         for i, m in enumerate(multipliers):
             out_planes = int(base_channels * m)
-            self.blocks.append(BCResBlock(in_planes, out_planes, stride=1 if i==0 else 2, use_ssn=use_ssn, dropout=dropout))
+            self.blocks.append(BCResBlock(in_planes, out_planes, stride=1 if i==0 else 2, use_ssn=use_ssn))
             in_planes = out_planes
-            self.blocks.append(BCResBlock(in_planes, out_planes, use_ssn=use_ssn, dropout=dropout))
+            self.blocks.append(BCResBlock(in_planes, out_planes, use_ssn=use_ssn))
             
         self.conv2 = nn.Conv2d(in_planes, int(in_planes*1.5), 5, padding=(2, 2))
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
         
         self.embedding_dim = int(in_planes*1.5)
         
-        # Classifier Dropout
+        # Global Classifier Dropout
         self.dropout = nn.Dropout(dropout)
         
         if not self.use_arcface:
